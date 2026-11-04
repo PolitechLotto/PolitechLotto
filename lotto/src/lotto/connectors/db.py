@@ -2,7 +2,6 @@ import os
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
-from random import randint
 from typing import Any
 
 from sqlalchemy import Select, select
@@ -25,9 +24,6 @@ class Database:
         self, session_factory: async_sessionmaker[AsyncSession] | None = None
     ) -> None:
         self._session_factory = session_factory or create_session_factory()
-
-    async def get_random_int(self) -> int:
-        return randint(0, 10)
 
     async def list_games(
         self,

@@ -60,7 +60,3 @@ async def list_games_handler(
         offset=offset,
     )
     return GamesPageResponse(items=[_to_response(game) for game in games])
-
-
-async def example_handler(database: Database) -> int:
-    return await database.get_random_int()

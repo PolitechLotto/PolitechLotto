@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from lotto.connectors.models import Game, GameStatus
+from lotto.connectors.models import Game, GameStatus, GameType
 
 
 def make_game(**overrides: Any) -> Game:
@@ -23,3 +23,18 @@ def make_game(**overrides: Any) -> Game:
     }
     fields.update(overrides)
     return Game(**fields)
+
+
+def make_game_type(**overrides: Any) -> GameType:
+    fields: dict[str, Any] = {
+        "id": uuid.uuid4(),
+        "name": "6 z 49",
+        "description": "Pick 6 numbers out of 49.",
+        "number_pool_size": 49,
+        "number_pick_count": 6,
+        "ticket_price": 10,
+        "default_jackpot": 1000,
+        "is_active": True,
+    }
+    fields.update(overrides)
+    return GameType(**fields)

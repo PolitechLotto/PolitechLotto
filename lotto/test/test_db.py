@@ -9,7 +9,7 @@ from sqlalchemy.dialects import postgresql
 from lotto.connectors.db import Database
 from lotto.connectors.models import GameStatus
 
-from .factories import make_game
+from .factories import make_game, make_game_type
 
 
 class FakeSession:
@@ -140,3 +140,64 @@ async def test_list_games_sorts_by_scheduled_at(
     await make_database(session).list_games(**{**DEFAULT_ARGS, "status": status})
 
     assert compile_sql(session.statements[1]) == expected
+
+
+class FakeRowSession:
+    """Records executed statements and returns one canned row (or None)."""
+
+    def __init__(self, row: tuple[Any, ...] | None) -> None:
+        self.statements: list[Any] = []
+        self._row = row
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    async def execute(self, statement: Any) -> MagicMock:
+        self.statements.append(statement)
+        result = MagicMock()
+        result.one_or_none.return_value = self._row
+        return result
+
+
+GAME_TYPE_COLUMNS = (
+    "game_types.id AS id_1, game_types.name AS name_1, game_types.description,"
+    " game_types.number_pool_size, game_types.number_pick_count,"
+    " game_types.ticket_price AS ticket_price_1, game_types.default_jackpot,"
+    " game_types.is_active"
+)
+
+
+async def test_get_game_returns_game_and_game_type() -> None:
+    game_type = make_game_type()
+    game = make_game(game_type_id=game_type.id)
+    session = FakeRowSession(row=(game, game_type))
+
+    result = await make_database(session).get_game(game.id)  # type: ignore[arg-type]
+
+    assert result == (game, game_type)
+
+
+async def test_get_game_returns_none_for_unknown_id() -> None:
+    session = FakeRowSession(row=None)
+
+    result = await make_database(session).get_game(uuid.uuid4())  # type: ignore[arg-type]
+
+    assert result is None
+
+
+async def test_get_game_joins_game_type_and_filters_by_id() -> None:
+    session = FakeRowSession(row=None)
+    expected = [
+        (
+            f"SELECT {GAME_COLUMNS}, {GAME_TYPE_COLUMNS} FROM games"
+            " JOIN game_types ON games.game_type_id = game_types.id"
+            " WHERE games.id = '00000000-0000-0000-0000-000000000001'"
+        )
+    ]
+
+    await make_database(session).get_game(uuid.UUID(int=1))  # type: ignore[arg-type]
+
+    assert [compile_sql(s) for s in session.statements] == expected

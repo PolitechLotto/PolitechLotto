@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from .models import Game, GameStatus
+from .models import Game, GameStatus, GameType
 
 DEFAULT_DATABASE_URL = "postgresql+asyncpg://lotto:lotto@localhost:5432/lotto"
 
@@ -55,6 +55,19 @@ class Database:
             total = (await session.execute(count_query)).scalar_one()
             games = (await session.execute(page_query)).scalars().all()
         return games, total
+
+    async def get_game(self, game_id: uuid.UUID) -> tuple[Game, GameType] | None:
+        query = (
+            select(Game, GameType)
+            .join(GameType, Game.game_type_id == GameType.id)
+            .where(Game.id == game_id)
+        )
+        async with self._session_factory() as session:
+            row = (await session.execute(query)).one_or_none()
+        if row is None:
+            return None
+        game, game_type = row
+        return game, game_type
 
 
 def _filter_games[Q: Select[Any]](

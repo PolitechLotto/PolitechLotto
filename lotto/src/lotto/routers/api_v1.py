@@ -1,14 +1,15 @@
 import uuid
 from datetime import datetime
+from http import HTTPStatus
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from lotto.connectors import get_database
 from lotto.connectors.db import Database
 from lotto.connectors.models import GameStatus
-from lotto.handlers.handlers_v1 import list_games_handler
+from lotto.handlers.handlers_v1 import get_game_handler, list_games_handler
 
 router = APIRouter(prefix="/v1")
 
@@ -57,3 +58,31 @@ async def list_games(
         offset=offset,
     )
     return GamesPageResponse.model_validate(page)
+
+
+class GameTypeSummaryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    number_pool_size: int
+    number_pick_count: int
+
+
+class GameDetailsResponse(GameResponse):
+    game_type: GameTypeSummaryResponse
+
+
+@router.get(
+    "/games/{game_id}",
+    description="Returns one game (draw) with its game type.",
+    responses={HTTPStatus.NOT_FOUND: {"description": "Game not found."}},
+)
+async def get_game(
+    database: Annotated[Database, Depends(get_database)],
+    game_id: uuid.UUID,
+) -> GameDetailsResponse:
+    game = await get_game_handler(database, game_id)
+    if game is None:
+        raise HTTPException(HTTPStatus.NOT_FOUND, detail="Game not found.")
+    return GameDetailsResponse.model_validate(game)

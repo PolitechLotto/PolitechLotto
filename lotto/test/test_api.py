@@ -8,7 +8,12 @@ import pytest
 
 from lotto.connectors import get_database
 from lotto.connectors.models import GameStatus
-from lotto.handlers.handlers_v1 import GamesPage, GameView
+from lotto.handlers.handlers_v1 import (
+    GameDetailsView,
+    GamesPage,
+    GameTypeSummaryView,
+    GameView,
+)
 from lotto.main import create_sub_app
 from lotto.routers import api_v1
 from lotto.routers.api_v1 import router
@@ -151,3 +156,89 @@ async def test_list_games_rejects_invalid_query(
     response = await client.get(f"{prefix}/games", params=params)
 
     assert (response.status_code, handler.await_count) == (422, 0)
+
+
+GAME_ID = "11111111-1111-1111-1111-111111111111"
+
+
+@pytest.fixture
+def get_handler(monkeypatch: pytest.MonkeyPatch) -> Iterator[AsyncMock]:
+    mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(api_v1, "get_game_handler", mock)
+    yield mock
+
+
+def make_game_details_view(**overrides: object) -> GameDetailsView:
+    return GameDetailsView(
+        **vars(make_game_view(**overrides)),
+        game_type=GameTypeSummaryView(
+            id=uuid.UUID("22222222-2222-2222-2222-222222222222"),
+            name="6 z 49",
+            number_pool_size=49,
+            number_pick_count=6,
+        ),
+    )
+
+
+async def test_get_game_returns_game_with_game_type(
+    client: httpx.AsyncClient, get_handler: AsyncMock
+) -> None:
+    get_handler.return_value = make_game_details_view(
+        status=GameStatus.FINISHED,
+        finished_at=datetime(2026, 11, 1, 18, 5, tzinfo=UTC),
+        seed="seed",
+        winning_numbers=[1, 2, 3, 4, 5, 6],
+    )
+    expected = {
+        "id": GAME_ID,
+        "name": "6 z 49",
+        "game_type_id": "22222222-2222-2222-2222-222222222222",
+        "ticket_price": 10,
+        "jackpot": 1000,
+        "status": "finished",
+        "scheduled_at": "2026-11-01T18:00:00Z",
+        "started_at": None,
+        "finished_at": "2026-11-01T18:05:00Z",
+        "seed_hash": "hash",
+        "seed": "seed",
+        "winning_numbers": [1, 2, 3, 4, 5, 6],
+        "game_type": {
+            "id": "22222222-2222-2222-2222-222222222222",
+            "name": "6 z 49",
+            "number_pool_size": 49,
+            "number_pick_count": 6,
+        },
+    }
+
+    response = await client.get(f"{prefix}/games/{GAME_ID}")
+
+    assert (response.status_code, response.json()) == (200, expected)
+
+
+async def test_get_game_passes_id_to_handler(
+    client: httpx.AsyncClient, get_handler: AsyncMock
+) -> None:
+    get_handler.return_value = make_game_details_view()
+
+    await client.get(f"{prefix}/games/{GAME_ID}")
+
+    assert get_handler.await_args_list == [call(database, uuid.UUID(GAME_ID))]
+
+
+async def test_get_game_returns_404_for_unknown_id(
+    client: httpx.AsyncClient, get_handler: AsyncMock
+) -> None:
+    response = await client.get(f"{prefix}/games/{GAME_ID}")
+
+    assert (response.status_code, response.json()) == (
+        404,
+        {"detail": "Game not found."},
+    )
+
+
+async def test_get_game_rejects_invalid_id(
+    client: httpx.AsyncClient, get_handler: AsyncMock
+) -> None:
+    response = await client.get(f"{prefix}/games/not-a-uuid")
+
+    assert (response.status_code, get_handler.await_count) == (422, 0)

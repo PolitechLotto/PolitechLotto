@@ -13,6 +13,19 @@ class DrawResult:
     commitment: str
     numbers: list[int]
 
+@dataclass(frozen=True)
+class DrawCommitment:
+    seed_hex: str
+    commitment: str
+
+
+def create_commitment() -> DrawCommitment:
+    seed = secrets.token_bytes(32)
+
+    return DrawCommitment(
+        seed_hex=seed.hex(),
+        commitment=hashlib.sha256(seed).hexdigest(),
+    )
 
 class DrawError(ValueError):
     pass

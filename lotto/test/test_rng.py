@@ -1,6 +1,7 @@
 import hashlib
 import pytest
-from services import rng
+from lotto.core import rng
+
 
 @pytest.fixture
 def DrawResult_struct():

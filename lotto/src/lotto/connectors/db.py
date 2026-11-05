@@ -86,3 +86,4 @@ def _filter_games[Q: Select[Any]](
     if scheduled_to is not None:
         query = query.where(Game.scheduled_at <= scheduled_to)
     return query
+

@@ -158,3 +158,9 @@ async def test_get_game_returns_none_for_unknown_id() -> None:
     view = await get_game_handler(make_get_game_database(None), uuid.uuid4())
 
     assert view is None
+
+
+async def finish_game_handler(database, game_id):
+    found = await database.get_game(game_id)
+    if found is None:
+        return None

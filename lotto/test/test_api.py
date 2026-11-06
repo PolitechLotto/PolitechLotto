@@ -14,7 +14,7 @@ from lotto.handlers.handlers_v1 import (
     GameTypeInactiveError,
     GameTypeNotFoundError,
     GameView,
-    ScheduledAtNotInFutureError, create_game_handler,
+    ScheduledAtNotInFutureError,
 )
 from lotto.main import create_sub_app
 from lotto.routers import api_v1

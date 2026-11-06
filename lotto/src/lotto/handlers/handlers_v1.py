@@ -72,7 +72,6 @@ def _game_view_fields(game: Game) -> dict[str, Any]:
 
 
 def generate_seed() -> SeedCommitment:
-    """Placeholder until the draw library (POL-64/65) defines the seed format."""
     seed = secrets.token_bytes(32)
     return SeedCommitment(seed=seed.hex(), seed_hash=hashlib.sha256(seed).hexdigest())
 

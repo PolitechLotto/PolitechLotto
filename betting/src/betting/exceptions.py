@@ -20,3 +20,7 @@ class GameNotOpen(Exception):
 
 class InvalidNumbers(Exception):
     pass
+
+
+class CouponNotFound(Exception):
+    """The coupon does not exist, or the caller may not see it."""

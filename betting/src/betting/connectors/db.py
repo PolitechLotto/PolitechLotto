@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Select, case, select
+from sqlalchemy import Select, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from .models import Coupon, CouponStatus
@@ -77,6 +77,23 @@ class Database:
                 .offset(offset)
             )
             return result.scalars().all()
+
+    async def count_coupons_by_users(
+        self, user_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, int]:
+        """Counts games played: refunded coupons are left out."""
+        query = (
+            select(Coupon.user_id, func.count())
+            .where(
+                Coupon.user_id.in_(user_ids),
+                Coupon.status != CouponStatus.REFUNDED,
+            )
+            .group_by(Coupon.user_id)
+        )
+
+        async with self._session_factory() as session:
+            result = await session.execute(query)
+            return {user_id: count for user_id, count in result.all()}
 
     async def get_coupon(self, coupon_id: uuid.UUID) -> Coupon | None:
         async with self._session_factory() as session:

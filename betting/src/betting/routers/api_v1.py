@@ -10,6 +10,7 @@ from betting.connectors.lotto import LottoClient
 from betting.connectors.models import CouponStatus
 from betting.connectors.wallet import WalletClient
 from betting.exceptions import (
+    CouponNotFound,
     GameNotFound,
     GameNotOpen,
     InsufficientFunds,
@@ -21,6 +22,7 @@ from betting.handlers.handlers_v1 import (
     CouponResponse,
     CouponsPageResponse,
     create_coupon_handler,
+    get_coupon_handler,
     list_coupons_handler,
 )
 
@@ -73,6 +75,28 @@ async def list_coupons(
         raise HTTPException(
             status_code=422, detail="`from` must not be after `to`."
         ) from error
+
+
+@router.get(
+    "/coupons/{coupon_id}",
+    description="Returns one coupon. Only its owner or an admin can read it.",
+    responses={404: {"description": "Coupon not found."}},
+)
+async def get_coupon(
+    database: Annotated[Database, Depends(get_database)],
+    x_user_id: Annotated[uuid.UUID, Header()],
+    coupon_id: uuid.UUID,
+    x_user_role: Annotated[str | None, Header()] = None,
+) -> CouponResponse:
+    try:
+        return await get_coupon_handler(
+            database,
+            caller_id=x_user_id,
+            caller_role=x_user_role,
+            coupon_id=coupon_id,
+        )
+    except CouponNotFound as error:
+        raise HTTPException(status_code=404, detail="Coupon not found.") from error
 
 
 @router.post(

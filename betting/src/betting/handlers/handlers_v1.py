@@ -8,9 +8,15 @@ from betting.connectors.db import Database
 from betting.connectors.lotto import LottoClient, LottoGame
 from betting.connectors.models import CouponStatus
 from betting.connectors.wallet import WalletClient
-from betting.exceptions import GameNotOpen, InvalidDateRange, InvalidNumbers
+from betting.exceptions import (
+    CouponNotFound,
+    GameNotOpen,
+    InvalidDateRange,
+    InvalidNumbers,
+)
 
 SCHEDULED = "scheduled"
+ADMIN_ROLE = "admin"
 
 _random = secrets.SystemRandom()
 
@@ -61,6 +67,19 @@ async def list_coupons_handler(
     return CouponsPageResponse(
         items=[CouponResponse.model_validate(coupon) for coupon in coupons]
     )
+
+
+async def get_coupon_handler(
+    database: Database,
+    caller_id: uuid.UUID,
+    caller_role: str | None,
+    coupon_id: uuid.UUID,
+) -> CouponResponse:
+    coupon = await database.get_coupon(coupon_id)
+    # Another player's coupon looks the same as a missing one: do not reveal it exists.
+    if coupon is None or (coupon.user_id != caller_id and caller_role != ADMIN_ROLE):
+        raise CouponNotFound
+    return CouponResponse.model_validate(coupon)
 
 
 async def create_coupon_handler(

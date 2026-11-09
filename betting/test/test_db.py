@@ -32,6 +32,9 @@ class FakeSession:
         self.statements.append(statement)
         result = MagicMock()
         result.scalars.return_value.all.return_value = self._coupons
+        result.scalar_one_or_none.return_value = (
+            self._coupons[0] if self._coupons else None
+        )
         return result
 
     def add(self, instance: Any) -> None:
@@ -213,3 +216,31 @@ async def test_create_coupon_returns_saved_coupon() -> None:
     )
 
     assert session.added == [coupon]
+
+
+async def test_get_coupon_selects_coupon_by_id() -> None:
+    session = FakeSession(coupons=[])
+    expected = [
+        (
+            f"SELECT {COUPON_COLUMNS} FROM coupons"
+            " WHERE coupons.id = '00000000-0000-0000-0000-00000000000a'"
+        )
+    ]
+
+    await make_database(session).get_coupon(uuid.UUID(int=10))
+
+    assert [compile_sql(s) for s in session.statements] == expected
+
+
+async def test_get_coupon_returns_coupon() -> None:
+    coupon = make_coupon()
+
+    result = await make_database(FakeSession(coupons=[coupon])).get_coupon(coupon.id)
+
+    assert result is coupon
+
+
+async def test_get_coupon_returns_none_for_unknown_id() -> None:
+    result = await make_database(FakeSession(coupons=[])).get_coupon(uuid.uuid4())
+
+    assert result is None

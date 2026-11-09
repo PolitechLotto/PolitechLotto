@@ -54,7 +54,3 @@ async def list_coupons_handler(
     return CouponsPageResponse(
         items=[CouponResponse.model_validate(coupon) for coupon in coupons]
     )
-
-
-async def example_handler(database: Database) -> int:
-    return await database.get_random_int()

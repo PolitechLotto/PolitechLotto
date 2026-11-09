@@ -18,6 +18,7 @@ from betting.exceptions import (
     UpstreamError,
 )
 from betting.handlers.handlers_v1 import (
+    CouponCountResponse,
     CouponResponse,
     CouponsPageResponse,
     GameCouponResponse,
@@ -501,3 +502,97 @@ async def test_list_game_coupons_rejects_invalid_query(
     response = await client.get(f"{prefix}/games/{game_id}/coupons", params=params)
 
     assert (response.status_code, game_handler.await_count) == (422, 0)
+
+
+OTHER_USER_ID = "44444444-4444-4444-4444-444444444444"
+
+
+@pytest.fixture
+def count_handler(monkeypatch: pytest.MonkeyPatch) -> Iterator[AsyncMock]:
+    mock = AsyncMock(return_value=[])
+    monkeypatch.setattr(api_v1, "count_coupons_handler", mock)
+    yield mock
+
+
+async def test_count_coupons_returns_counts(
+    client: httpx.AsyncClient, count_handler: AsyncMock
+) -> None:
+    count_handler.return_value = [
+        CouponCountResponse(user_id=uuid.UUID(CALLER_ID), coupons_count=3),
+        CouponCountResponse(user_id=uuid.UUID(OTHER_USER_ID), coupons_count=0),
+    ]
+    expected = [
+        {"user_id": CALLER_ID, "coupons_count": 3},
+        {"user_id": OTHER_USER_ID, "coupons_count": 0},
+    ]
+
+    response = await client.get(
+        f"{prefix}/statistics/coupon-counts",
+        params={"user_ids": f"{CALLER_ID},{OTHER_USER_ID}"},
+    )
+
+    assert (response.status_code, response.json()) == (200, expected)
+
+
+@pytest.mark.parametrize(
+    "user_ids",
+    [f"{CALLER_ID},{OTHER_USER_ID}", f" {CALLER_ID} , {OTHER_USER_ID} "],
+    ids=["plain", "with-spaces"],
+)
+async def test_count_coupons_passes_user_ids_to_handler(
+    client: httpx.AsyncClient, count_handler: AsyncMock, user_ids: str
+) -> None:
+    expected = [
+        call(database, user_ids=[uuid.UUID(CALLER_ID), uuid.UUID(OTHER_USER_ID)])
+    ]
+
+    await client.get(
+        f"{prefix}/statistics/coupon-counts", params={"user_ids": user_ids}
+    )
+
+    assert count_handler.await_args_list == expected
+
+
+async def test_count_coupons_accepts_200_user_ids(
+    client: httpx.AsyncClient, count_handler: AsyncMock
+) -> None:
+    user_ids = ",".join(str(uuid.UUID(int=n)) for n in range(200))
+
+    response = await client.get(
+        f"{prefix}/statistics/coupon-counts", params={"user_ids": user_ids}
+    )
+
+    assert (response.status_code, count_handler.await_count) == (200, 1)
+
+
+@pytest.mark.parametrize(
+    ("params", "detail"),
+    [
+        (
+            {"user_ids": ",".join(str(uuid.UUID(int=n)) for n in range(201))},
+            "At most 200 `user_ids` allowed.",
+        ),
+        ({"user_ids": "not-a-uuid"}, "`user_ids` must be comma-separated UUIDs."),
+        ({"user_ids": ""}, "`user_ids` must be comma-separated UUIDs."),
+        ({"user_ids": f"{CALLER_ID},"}, "`user_ids` must be comma-separated UUIDs."),
+    ],
+    ids=["too-many", "invalid-uuid", "empty", "trailing-comma"],
+)
+async def test_count_coupons_rejects_invalid_user_ids(
+    client: httpx.AsyncClient, count_handler: AsyncMock, params: dict, detail: str
+) -> None:
+    response = await client.get(f"{prefix}/statistics/coupon-counts", params=params)
+
+    assert (response.status_code, response.json(), count_handler.await_count) == (
+        422,
+        {"detail": detail},
+        0,
+    )
+
+
+async def test_count_coupons_requires_user_ids(
+    client: httpx.AsyncClient, count_handler: AsyncMock
+) -> None:
+    response = await client.get(f"{prefix}/statistics/coupon-counts")
+
+    assert (response.status_code, count_handler.await_count) == (422, 0)

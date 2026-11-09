@@ -6,9 +6,16 @@ from unittest.mock import AsyncMock, MagicMock, call
 import httpx
 import pytest
 
-from betting.connectors import get_database
+from betting.connectors import get_database, get_lotto, get_wallet
 from betting.connectors.models import CouponStatus
-from betting.exceptions import InvalidDateRange
+from betting.exceptions import (
+    GameNotFound,
+    GameNotOpen,
+    InsufficientFunds,
+    InvalidDateRange,
+    InvalidNumbers,
+    UpstreamError,
+)
 from betting.handlers.handlers_v1 import CouponResponse, CouponsPageResponse
 from betting.main import create_sub_app
 from betting.routers import api_v1
@@ -18,7 +25,11 @@ app = create_sub_app(title="API", routers=[router])
 prefix = "/v1"
 
 database = MagicMock()
+lotto = MagicMock()
+wallet = MagicMock()
 app.dependency_overrides[get_database] = lambda: database
+app.dependency_overrides[get_lotto] = lambda: lotto
+app.dependency_overrides[get_wallet] = lambda: wallet
 
 CALLER_ID = "00000000-0000-0000-0000-000000000001"
 HEADERS = {"X-User-Id": CALLER_ID}
@@ -166,5 +177,137 @@ async def test_list_coupons_returns_422_for_invalid_date_range(
     expected = (422, {"detail": "`from` must not be after `to`."})
 
     response = await client.get(f"{prefix}/coupons", headers=HEADERS)
+
+    assert (response.status_code, response.json()) == expected
+
+
+GAME_ID = "22222222-2222-2222-2222-222222222222"
+NUMBERS = [41, 3, 22, 48, 7, 19]
+
+
+@pytest.fixture
+def create_handler(monkeypatch: pytest.MonkeyPatch) -> Iterator[AsyncMock]:
+    mock = AsyncMock(return_value=make_coupon_response())
+    monkeypatch.setattr(api_v1, "create_coupon_handler", mock)
+    yield mock
+
+
+async def test_create_coupon_returns_created_coupon(
+    client: httpx.AsyncClient, create_handler: AsyncMock
+) -> None:
+    expected = {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "created_at": "2026-11-01T17:00:00Z",
+        "game_id": GAME_ID,
+        "game_type_id": "33333333-3333-3333-3333-333333333333",
+        "numbers": [1, 2, 3, 4, 5, 6],
+        "is_quick_pick": True,
+        "price": 10,
+        "status": "active",
+        "hits": None,
+        "points_won": None,
+    }
+
+    response = await client.post(
+        f"{prefix}/coupons",
+        headers=HEADERS,
+        json={"game_id": GAME_ID, "is_quick_pick": True},
+    )
+
+    assert (response.status_code, response.json()) == (201, expected)
+
+
+@pytest.mark.parametrize(
+    ("body", "numbers"),
+    [
+        ({"game_id": GAME_ID, "numbers": NUMBERS}, NUMBERS),
+        ({"game_id": GAME_ID, "numbers": NUMBERS, "is_quick_pick": False}, NUMBERS),
+        ({"game_id": GAME_ID, "is_quick_pick": True}, None),
+    ],
+    ids=["numbers", "numbers-explicit-false", "quick-pick"],
+)
+async def test_create_coupon_passes_request_to_handler(
+    client: httpx.AsyncClient, create_handler: AsyncMock, body: dict, numbers: list
+) -> None:
+    expected = [
+        call(
+            database,
+            lotto,
+            wallet,
+            user_id=uuid.UUID(CALLER_ID),
+            game_id=uuid.UUID(GAME_ID),
+            numbers=numbers,
+        )
+    ]
+
+    await client.post(f"{prefix}/coupons", headers=HEADERS, json=body)
+
+    assert create_handler.await_args_list == expected
+
+
+@pytest.mark.parametrize(
+    ("headers", "body"),
+    [
+        ({}, {"game_id": GAME_ID, "is_quick_pick": True}),
+        (HEADERS, {"is_quick_pick": True}),
+        (HEADERS, {"game_id": "not-a-uuid", "is_quick_pick": True}),
+        (HEADERS, {"game_id": GAME_ID}),
+        (HEADERS, {"game_id": GAME_ID, "is_quick_pick": False}),
+        (HEADERS, {"game_id": GAME_ID, "numbers": NUMBERS, "is_quick_pick": True}),
+        (HEADERS, {"game_id": GAME_ID, "numbers": ["a"]}),
+    ],
+    ids=[
+        "no-user",
+        "no-game",
+        "invalid-game-id",
+        "neither",
+        "neither-explicit-false",
+        "both",
+        "non-integer-numbers",
+    ],
+)
+async def test_create_coupon_rejects_invalid_request(
+    client: httpx.AsyncClient, create_handler: AsyncMock, headers: dict, body: dict
+) -> None:
+    response = await client.post(f"{prefix}/coupons", headers=headers, json=body)
+
+    assert (response.status_code, create_handler.await_count) == (422, 0)
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (GameNotFound(), (404, {"detail": "Game not found."})),
+        (InsufficientFunds(), (409, {"detail": "Not enough points."})),
+        (GameNotOpen(), (422, {"detail": "The game is not open for betting."})),
+        (
+            InvalidNumbers("Numbers must be unique."),
+            (422, {"detail": "Numbers must be unique."}),
+        ),
+        (UpstreamError("lotto"), (502, {"detail": "The lotto service failed."})),
+        (UpstreamError("wallet"), (502, {"detail": "The wallet service failed."})),
+    ],
+    ids=[
+        "game-not-found",
+        "insufficient-funds",
+        "game-not-open",
+        "invalid-numbers",
+        "lotto-failed",
+        "wallet-failed",
+    ],
+)
+async def test_create_coupon_maps_errors(
+    client: httpx.AsyncClient,
+    create_handler: AsyncMock,
+    error: Exception,
+    expected: tuple,
+) -> None:
+    create_handler.side_effect = error
+
+    response = await client.post(
+        f"{prefix}/coupons",
+        headers=HEADERS,
+        json={"game_id": GAME_ID, "is_quick_pick": True},
+    )
 
     assert (response.status_code, response.json()) == expected

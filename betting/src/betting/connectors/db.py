@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, case, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from .models import Coupon, CouponStatus
@@ -48,6 +48,31 @@ class Database:
         async with self._session_factory() as session:
             result = await session.execute(
                 query.order_by(Coupon.created_at.desc(), Coupon.id.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+            return result.scalars().all()
+
+    async def list_coupons_for_game(
+        self,
+        game_id: uuid.UUID,
+        status: CouponStatus | None,
+        limit: int,
+        offset: int,
+    ) -> Sequence[Coupon]:
+        query = select(Coupon).where(Coupon.game_id == game_id)
+        if status is not None:
+            query = query.where(Coupon.status == status)
+        winners_first = case((Coupon.status == CouponStatus.WON, 0), else_=1)
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                query.order_by(
+                    winners_first,
+                    Coupon.points_won.desc().nulls_last(),
+                    Coupon.created_at.asc(),
+                    Coupon.id.asc(),
+                )
                 .limit(limit)
                 .offset(offset)
             )

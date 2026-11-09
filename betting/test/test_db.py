@@ -3,10 +3,12 @@ from datetime import UTC, datetime
 from typing import Any, Self
 from unittest.mock import MagicMock
 
+import pytest
 from sqlalchemy.dialects import postgresql
 
+from betting.connectors import db
 from betting.connectors.db import Database
-from betting.connectors.models import CouponStatus
+from betting.connectors.models import Coupon, CouponStatus
 
 from .factories import make_coupon
 
@@ -16,6 +18,8 @@ class FakeSession:
 
     def __init__(self, coupons: list[Any]) -> None:
         self.statements: list[Any] = []
+        self.added: list[Any] = []
+        self.commits = 0
         self._coupons = coupons
 
     async def __aenter__(self) -> Self:
@@ -29,6 +33,12 @@ class FakeSession:
         result = MagicMock()
         result.scalars.return_value.all.return_value = self._coupons
         return result
+
+    def add(self, instance: Any) -> None:
+        self.added.append(instance)
+
+    async def commit(self) -> None:
+        self.commits += 1
 
 
 def compile_sql(statement: Any) -> str:
@@ -137,3 +147,69 @@ async def test_list_coupons_excludes_active_coupons() -> None:
     )
 
     assert [compile_sql(s) for s in session.statements] == expected
+
+
+NOW = datetime(2026, 11, 9, 18, 0, tzinfo=UTC)
+
+
+class FrozenDatetime(datetime):
+    @classmethod
+    def now(cls, tz: Any = None) -> Self:
+        return cls.fromtimestamp(NOW.timestamp(), tz)
+
+
+def coupon_columns(coupon: Coupon) -> dict[str, Any]:
+    return {column.key: getattr(coupon, column.key) for column in Coupon.__table__.c}
+
+
+async def test_create_coupon_saves_active_coupon_with_sorted_numbers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(db, "datetime", FrozenDatetime)
+    session = FakeSession(coupons=[])
+    expected = (
+        [
+            {
+                "id": uuid.UUID(int=10),
+                "user_id": USER_ID,
+                "game_id": uuid.UUID(int=11),
+                "game_type_id": uuid.UUID(int=12),
+                "numbers": [3, 7, 19, 22, 41, 48],
+                "is_quick_pick": False,
+                "price": 10,
+                "status": CouponStatus.ACTIVE,
+                "hits": None,
+                "points_won": None,
+                "created_at": NOW,
+            }
+        ],
+        1,
+    )
+
+    await make_database(session).create_coupon(
+        id=uuid.UUID(int=10),
+        user_id=USER_ID,
+        game_id=uuid.UUID(int=11),
+        game_type_id=uuid.UUID(int=12),
+        numbers=[41, 3, 22, 48, 7, 19],
+        is_quick_pick=False,
+        price=10,
+    )
+
+    assert ([coupon_columns(c) for c in session.added], session.commits) == expected
+
+
+async def test_create_coupon_returns_saved_coupon() -> None:
+    session = FakeSession(coupons=[])
+
+    coupon = await make_database(session).create_coupon(
+        id=uuid.UUID(int=10),
+        user_id=USER_ID,
+        game_id=uuid.UUID(int=11),
+        game_type_id=uuid.UUID(int=12),
+        numbers=[1, 2, 3, 4, 5, 6],
+        is_quick_pick=True,
+        price=10,
+    )
+
+    assert session.added == [coupon]

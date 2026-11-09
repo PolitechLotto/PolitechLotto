@@ -1,7 +1,7 @@
 import os
 import uuid
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import Select, select
@@ -52,6 +52,35 @@ class Database:
                 .offset(offset)
             )
             return result.scalars().all()
+
+    async def create_coupon(
+        self,
+        id: uuid.UUID,
+        user_id: uuid.UUID,
+        game_id: uuid.UUID,
+        game_type_id: uuid.UUID,
+        numbers: list[int],
+        is_quick_pick: bool,
+        price: int,
+    ) -> Coupon:
+        coupon = Coupon(
+            id=id,
+            user_id=user_id,
+            game_id=game_id,
+            game_type_id=game_type_id,
+            numbers=sorted(numbers),
+            is_quick_pick=is_quick_pick,
+            price=price,
+            status=CouponStatus.ACTIVE,
+            hits=None,
+            points_won=None,
+            created_at=datetime.now(UTC),
+        )
+
+        async with self._session_factory() as session:
+            session.add(coupon)
+            await session.commit()
+        return coupon
 
 
 def _filter_coupons[Q: Select[Any]](

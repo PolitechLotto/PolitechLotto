@@ -21,9 +21,11 @@ from betting.exceptions import (
 from betting.handlers.handlers_v1 import (
     CouponResponse,
     CouponsPageResponse,
+    GameCouponsPageResponse,
     create_coupon_handler,
     get_coupon_handler,
     list_coupons_handler,
+    list_game_coupons_handler,
 )
 
 router = APIRouter(prefix="/v1")
@@ -139,3 +141,22 @@ async def create_coupon(
         raise HTTPException(
             status_code=502, detail=f"The {error} service failed."
         ) from error
+
+
+@router.get(
+    "/games/{game_id}/coupons",
+    description=(
+        "Lists the coupons of one game, winners first. Numbers are hidden until"
+        " the game is drawn."
+    ),
+)
+async def list_game_coupons(
+    database: Annotated[Database, Depends(get_database)],
+    game_id: uuid.UUID,
+    status: CouponStatus | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> GameCouponsPageResponse:
+    return await list_game_coupons_handler(
+        database, game_id=game_id, status=status, limit=limit, offset=offset
+    )

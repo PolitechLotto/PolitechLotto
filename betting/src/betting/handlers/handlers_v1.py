@@ -59,6 +59,11 @@ class GameCouponsPageResponse(BaseModel):
     items: list[GameCouponResponse]
 
 
+class CouponCountResponse(BaseModel):
+    user_id: uuid.UUID
+    coupons_count: int
+
+
 def _to_game_coupon_response(coupon: Coupon) -> GameCouponResponse:
     response = GameCouponResponse.model_validate(coupon)
     # Numbers stay hidden until the game is drawn, so they cannot be copied.
@@ -109,6 +114,18 @@ async def list_game_coupons_handler(
     return GameCouponsPageResponse(
         items=[_to_game_coupon_response(coupon) for coupon in coupons]
     )
+
+
+async def count_coupons_handler(
+    database: Database, user_ids: list[uuid.UUID]
+) -> list[CouponCountResponse]:
+    """Counts each user's coupons, in the order asked. Users without coupons get 0."""
+    unique_ids = list(dict.fromkeys(user_ids))
+    counts = await database.count_coupons_by_users(unique_ids)
+    return [
+        CouponCountResponse(user_id=user_id, coupons_count=counts.get(user_id, 0))
+        for user_id in unique_ids
+    ]
 
 
 async def get_coupon_handler(

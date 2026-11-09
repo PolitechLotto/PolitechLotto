@@ -19,9 +19,11 @@ from betting.exceptions import (
     UpstreamError,
 )
 from betting.handlers.handlers_v1 import (
+    CouponCountResponse,
     CouponResponse,
     CouponsPageResponse,
     GameCouponsPageResponse,
+    count_coupons_handler,
     create_coupon_handler,
     get_coupon_handler,
     list_coupons_handler,
@@ -29,6 +31,8 @@ from betting.handlers.handlers_v1 import (
 )
 
 router = APIRouter(prefix="/v1")
+
+MAX_USER_IDS = 200
 
 
 class CreateCouponRequest(BaseModel):
@@ -160,3 +164,32 @@ async def list_game_coupons(
     return await list_game_coupons_handler(
         database, game_id=game_id, status=status, limit=limit, offset=offset
     )
+
+
+def parse_user_ids(
+    user_ids: Annotated[str, Query(description="Comma-separated user IDs.")],
+) -> list[uuid.UUID]:
+    parts = user_ids.split(",")
+    if len(parts) > MAX_USER_IDS:
+        raise HTTPException(
+            status_code=422, detail=f"At most {MAX_USER_IDS} `user_ids` allowed."
+        )
+    try:
+        return [uuid.UUID(part.strip()) for part in parts]
+    except ValueError as error:
+        raise HTTPException(
+            status_code=422, detail="`user_ids` must be comma-separated UUIDs."
+        ) from error
+
+
+@router.get(
+    "/statistics/coupon-counts",
+    description=(
+        "Returns how many coupons each user bought. Refunded coupons do not count."
+    ),
+)
+async def count_coupons(
+    database: Annotated[Database, Depends(get_database)],
+    user_ids: Annotated[list[uuid.UUID], Depends(parse_user_ids)],
+) -> list[CouponCountResponse]:
+    return await count_coupons_handler(database, user_ids=user_ids)

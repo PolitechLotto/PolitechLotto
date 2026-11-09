@@ -18,10 +18,12 @@ from betting.exceptions import (
 )
 from betting.handlers import handlers_v1
 from betting.handlers.handlers_v1 import (
+    CouponCountResponse,
     CouponResponse,
     CouponsPageResponse,
     GameCouponResponse,
     GameCouponsPageResponse,
+    count_coupons_handler,
     create_coupon_handler,
     get_coupon_handler,
     list_coupons_handler,
@@ -453,3 +455,43 @@ async def test_list_game_coupons_returns_empty_page() -> None:
     page = await list_game_coupons_handler(make_game_database([]), GAME_ID, None, 50, 0)
 
     assert page == GameCouponsPageResponse(items=[])
+
+
+def make_counting_database(counts: dict[uuid.UUID, int]) -> AsyncMock:
+    database = AsyncMock()
+    database.count_coupons_by_users.return_value = counts
+    return database
+
+
+async def test_count_coupons_passes_unique_user_ids_to_database() -> None:
+    database = make_counting_database({})
+
+    await count_coupons_handler(database, [CALLER_ID, OTHER_USER_ID, CALLER_ID])
+
+    assert database.count_coupons_by_users.await_args_list == [
+        call([CALLER_ID, OTHER_USER_ID])
+    ]
+
+
+async def test_count_coupons_returns_counts_in_request_order() -> None:
+    database = make_counting_database({CALLER_ID: 3, OTHER_USER_ID: 1})
+    expected = [
+        CouponCountResponse(user_id=OTHER_USER_ID, coupons_count=1),
+        CouponCountResponse(user_id=CALLER_ID, coupons_count=3),
+    ]
+
+    counts = await count_coupons_handler(database, [OTHER_USER_ID, CALLER_ID])
+
+    assert counts == expected
+
+
+async def test_count_coupons_returns_zero_for_users_without_coupons() -> None:
+    database = make_counting_database({CALLER_ID: 3})
+    expected = [
+        CouponCountResponse(user_id=CALLER_ID, coupons_count=3),
+        CouponCountResponse(user_id=OTHER_USER_ID, coupons_count=0),
+    ]
+
+    counts = await count_coupons_handler(database, [CALLER_ID, OTHER_USER_ID])
+
+    assert counts == expected

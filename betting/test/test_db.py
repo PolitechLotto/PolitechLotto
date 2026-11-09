@@ -14,10 +14,11 @@ from .factories import make_coupon
 
 
 class FakeSession:
-    """Records executed statements and returns a canned page of coupons."""
+    """Records executed statements and returns canned coupons or rows."""
 
-    def __init__(self, coupons: list[Any]) -> None:
+    def __init__(self, coupons: list[Any], rows: list[Any] | None = None) -> None:
         self.statements: list[Any] = []
+        self._rows = rows or []
         self.added: list[Any] = []
         self.commits = 0
         self._coupons = coupons
@@ -32,6 +33,7 @@ class FakeSession:
         self.statements.append(statement)
         result = MagicMock()
         result.scalars.return_value.all.return_value = self._coupons
+        result.all.return_value = self._rows
         result.scalar_one_or_none.return_value = (
             self._coupons[0] if self._coupons else None
         )
@@ -295,3 +297,34 @@ async def test_list_coupons_for_game_filters_by_status() -> None:
     )
 
     assert [compile_sql(s) for s in session.statements] == expected
+
+
+async def test_count_coupons_by_users_groups_by_user() -> None:
+    session = FakeSession(coupons=[])
+    expected = [
+        (
+            "SELECT coupons.user_id, count(*) AS count_1 FROM coupons"
+            " WHERE coupons.user_id IN ('00000000-0000-0000-0000-000000000001',"
+            " '00000000-0000-0000-0000-000000000002')"
+            " AND coupons.status != 'refunded' GROUP BY coupons.user_id"
+        )
+    ]
+
+    await make_database(session).count_coupons_by_users(
+        [uuid.UUID(int=1), uuid.UUID(int=2)]
+    )
+
+    assert [compile_sql(s) for s in session.statements] == expected
+
+
+async def test_count_coupons_by_users_returns_counts_by_user() -> None:
+    session = FakeSession(
+        coupons=[], rows=[(uuid.UUID(int=1), 3), (uuid.UUID(int=2), 1)]
+    )
+    expected = {uuid.UUID(int=1): 3, uuid.UUID(int=2): 1}
+
+    result = await make_database(session).count_coupons_by_users(
+        [uuid.UUID(int=1), uuid.UUID(int=2)]
+    )
+
+    assert result == expected

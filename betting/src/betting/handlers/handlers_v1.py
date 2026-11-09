@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict
 
 from betting.connectors.db import Database
 from betting.connectors.lotto import LottoClient, LottoGame
-from betting.connectors.models import CouponStatus
+from betting.connectors.models import Coupon, CouponStatus
 from betting.connectors.wallet import WalletClient
 from betting.exceptions import (
     CouponNotFound,
@@ -40,6 +40,33 @@ class CouponsPageResponse(BaseModel):
     items: list[CouponResponse]
 
 
+class GameCouponResponse(BaseModel):
+    """A coupon as other players see it, in a game's coupon table."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    created_at: datetime
+    user_id: uuid.UUID
+    numbers: list[int] | None
+    is_quick_pick: bool
+    status: CouponStatus
+    hits: int | None
+    points_won: int | None
+
+
+class GameCouponsPageResponse(BaseModel):
+    items: list[GameCouponResponse]
+
+
+def _to_game_coupon_response(coupon: Coupon) -> GameCouponResponse:
+    response = GameCouponResponse.model_validate(coupon)
+    # Numbers stay hidden until the game is drawn, so they cannot be copied.
+    if coupon.status == CouponStatus.ACTIVE:
+        return response.model_copy(update={"numbers": None})
+    return response
+
+
 async def list_coupons_handler(
     database: Database,
     caller_id: uuid.UUID,
@@ -66,6 +93,21 @@ async def list_coupons_handler(
     )
     return CouponsPageResponse(
         items=[CouponResponse.model_validate(coupon) for coupon in coupons]
+    )
+
+
+async def list_game_coupons_handler(
+    database: Database,
+    game_id: uuid.UUID,
+    status: CouponStatus | None,
+    limit: int,
+    offset: int,
+) -> GameCouponsPageResponse:
+    coupons = await database.list_coupons_for_game(
+        game_id=game_id, status=status, limit=limit, offset=offset
+    )
+    return GameCouponsPageResponse(
+        items=[_to_game_coupon_response(coupon) for coupon in coupons]
     )
 
 

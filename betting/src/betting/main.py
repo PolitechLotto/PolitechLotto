@@ -40,8 +40,9 @@ def create_app(
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator:
-    get_connectors_object()
+    connectors = get_connectors_object()
     yield
+    await connectors.close()
 
 
 app = create_app(lifespan=lifespan, title="betting")

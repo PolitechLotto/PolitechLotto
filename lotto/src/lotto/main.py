@@ -14,8 +14,8 @@ def create_sub_app(
     extra_fastapi_args: dict[str, Any] | None = None,
 ) -> FastAPI:
     app = FastAPI(title=title, **(extra_fastapi_args or {}))
-    for router in routers:
-        app.include_router(router)
+    for api_router in routers:
+        app.include_router(api_router)
     return app
 
 
@@ -40,8 +40,10 @@ def create_app(
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator:
-    get_connectors_object()
+    connectors = get_connectors_object()
     yield
+    await connectors.db.close()
+    await connectors.broker.close()
 
 
 app = create_app(lifespan=lifespan, title="lotto")

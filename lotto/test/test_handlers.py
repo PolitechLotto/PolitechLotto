@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime
 from typing import cast
 
@@ -5,9 +6,9 @@ import pytest
 
 from lotto.connectors.db import Database
 from lotto.connectors.models import GameStatus
-from lotto.handlers.handlers_v1 import list_games_handler
+from lotto.handlers.handlers_v1 import get_game_handler, list_games_handler
 
-from .conftest import GAME_TYPE_ID, FakeDatabase, make_game
+from .conftest import GAME_TYPE_ID, FakeDatabase, make_game, make_game_with_type
 
 
 async def test_passes_filters_and_pagination_to_database(fake_db: FakeDatabase) -> None:
@@ -98,3 +99,42 @@ async def test_mixed_statuses_are_masked_independently() -> None:
 
     assert page.items[0].seed == "secret-seed"
     assert page.items[1].seed is None
+
+
+async def test_get_game_returns_game_with_game_type() -> None:
+    game = make_game_with_type(GameStatus.FINISHED)
+    db = FakeDatabase([game])
+
+    details = await get_game_handler(cast(Database, db), game.id)
+
+    assert details is not None
+    assert details.id == game.id
+    assert details.seed == "secret-seed"
+    assert details.winning_numbers == [1, 2, 3, 4, 5, 6]
+    assert details.game_type.id == GAME_TYPE_ID
+    assert details.game_type.name == "Lotto"
+    assert details.game_type.number_pool_size == 49
+    assert details.game_type.number_pick_count == 6
+    assert db.calls == [{"game_id": game.id}]
+
+
+@pytest.mark.parametrize("status", [GameStatus.SCHEDULED, GameStatus.CANCELLED])
+async def test_get_game_hides_seed_and_winning_numbers_for_unfinished_game(
+    status: GameStatus,
+) -> None:
+    game = make_game_with_type(status)
+    db = FakeDatabase([game])
+
+    details = await get_game_handler(cast(Database, db), game.id)
+
+    assert details is not None
+    assert details.seed is None
+    assert details.winning_numbers is None
+    assert details.seed_hash == "hash"
+    assert details.game_type.name == "Lotto"
+
+
+async def test_get_game_returns_none_for_unknown_id() -> None:
+    db = FakeDatabase([make_game_with_type()])
+
+    assert await get_game_handler(cast(Database, db), uuid.uuid4()) is None

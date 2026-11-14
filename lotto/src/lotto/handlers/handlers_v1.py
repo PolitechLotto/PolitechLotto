@@ -31,7 +31,20 @@ class GamesPage(BaseModel):
     offset: int
 
 
-def _hide_unrevealed(game: GameOut) -> GameOut:
+class GameTypeSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    number_pool_size: int
+    number_pick_count: int
+
+
+class GameDetails(GameOut):
+    game_type: GameTypeSummary
+
+
+def _hide_unrevealed[T: GameOut](game: T) -> T:
     if game.status is GameStatus.FINISHED:
         return game
     return game.model_copy(update={"seed": None, "winning_numbers": None})
@@ -51,3 +64,10 @@ async def list_games_handler(
     )
     items = [_hide_unrevealed(GameOut.model_validate(game)) for game in result.items]
     return GamesPage(items=items, total=result.total, limit=limit, offset=offset)
+
+
+async def get_game_handler(database: Database, game_id: UUID) -> GameDetails | None:
+    game = await database.get_game(game_id)
+    if game is None:
+        return None
+    return _hide_unrevealed(GameDetails.model_validate(game))

@@ -4,6 +4,7 @@ from datetime import datetime
 
 from sqlalchemy import ColumnElement, Select, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.orm import joinedload
 
 from .models import Game, GameStatus
 
@@ -58,6 +59,14 @@ def build_count_games_query(
     return select(func.count()).select_from(Game).where(*filters)
 
 
+def build_get_game_query(game_id: uuid.UUID) -> Select[Game]:
+    return (
+        select(Game)
+        .options(joinedload(Game.game_type, innerjoin=True))
+        .where(Game.id == game_id)
+    )
+
+
 class Database:
     def __init__(self, url: str) -> None:
         self._engine = create_async_engine(url)
@@ -83,3 +92,7 @@ class Database:
             items = list((await session.scalars(items_query)).all())
             total = await session.scalar(count_query) or 0
         return GameListResult(items=items, total=total)
+
+    async def get_game(self, game_id: uuid.UUID) -> Game | None:
+        async with self._sessionmaker() as session:
+            return await session.scalar(build_get_game_query(game_id))

@@ -1,3 +1,4 @@
+import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
@@ -9,7 +10,7 @@ from lotto.connectors.models import GameStatus
 from lotto.main import create_sub_app
 from lotto.routers.api_v1 import router
 
-from .conftest import GAME_TYPE_ID, FakeDatabase, make_game
+from .conftest import GAME_TYPE_ID, FakeDatabase, make_game, make_game_with_type
 
 URL = "/v1/games"
 GAME_KEYS = {
@@ -134,6 +135,62 @@ async def test_list_games_rejects_invalid_query(
     client: httpx.AsyncClient, fake_db: FakeDatabase, params: dict[str, str | int]
 ) -> None:
     response = await client.get(URL, params=params)
+
+    assert response.status_code == 422
+    assert fake_db.calls == []
+
+
+async def test_get_game_returns_game_with_game_type(
+    client: httpx.AsyncClient, fake_db: FakeDatabase
+) -> None:
+    game = make_game_with_type(GameStatus.FINISHED)
+    fake_db.games = [game]
+
+    response = await client.get(f"{URL}/{game.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == GAME_KEYS | {"game_type"}
+    assert body["id"] == str(game.id)
+    assert body["seed"] == "secret-seed"
+    assert body["winning_numbers"] == [1, 2, 3, 4, 5, 6]
+    assert body["game_type"] == {
+        "id": str(GAME_TYPE_ID),
+        "name": "Lotto",
+        "number_pool_size": 49,
+        "number_pick_count": 6,
+    }
+
+
+async def test_get_game_hides_secrets_of_unfinished_game(
+    client: httpx.AsyncClient, fake_db: FakeDatabase
+) -> None:
+    game = make_game_with_type(GameStatus.SCHEDULED)
+    fake_db.games = [game]
+
+    body = (await client.get(f"{URL}/{game.id}")).json()
+
+    assert body["seed"] is None
+    assert body["winning_numbers"] is None
+    assert body["seed_hash"] == "hash"
+
+
+async def test_get_game_returns_404_for_unknown_id(
+    client: httpx.AsyncClient, fake_db: FakeDatabase
+) -> None:
+    game_id = uuid.uuid4()
+
+    response = await client.get(f"{URL}/{game_id}")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Game not found"}
+    assert fake_db.calls == [{"game_id": game_id}]
+
+
+async def test_get_game_rejects_invalid_id(
+    client: httpx.AsyncClient, fake_db: FakeDatabase
+) -> None:
+    response = await client.get(f"{URL}/not-a-uuid")
 
     assert response.status_code == 422
     assert fake_db.calls == []

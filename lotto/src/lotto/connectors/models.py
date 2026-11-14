@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import ARRAY, DateTime, Enum, ForeignKey, Integer, String
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -76,3 +76,5 @@ class Game(Base):
     seed_hash: Mapped[str] = mapped_column(String)
     seed: Mapped[str] = mapped_column(String)
     winning_numbers: Mapped[list[int] | None] = mapped_column(ARRAY(Integer))
+
+    game_type: Mapped[GameType] = relationship(lazy="raise")

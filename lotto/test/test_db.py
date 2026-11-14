@@ -9,11 +9,12 @@ from sqlalchemy.dialects import postgresql
 from lotto.connectors.db import (
     Database,
     build_count_games_query,
+    build_get_game_query,
     build_list_games_query,
 )
 from lotto.connectors.models import GameStatus
 
-from .conftest import GAME_TYPE_ID, make_game
+from .conftest import GAME_TYPE_ID, make_game, make_game_with_type
 
 DATE_FROM = datetime(2026, 11, 1, tzinfo=UTC)
 DATE_TO = datetime(2026, 11, 30, tzinfo=UTC)
@@ -155,3 +156,53 @@ def test_game_status_enum_stores_lowercase_values() -> None:
 
 def test_game_id_is_uuid() -> None:
     assert isinstance(make_game().id, uuid.UUID)
+
+
+def test_get_game_query_joins_game_type_and_filters_by_id() -> None:
+    game_id = uuid.uuid4()
+
+    sql, params = compile_query(build_get_game_query(game_id))
+
+    assert (
+        "JOIN game_types AS game_types_1 ON game_types_1.id = games.game_type_id" in sql
+    )
+    assert "LEFT OUTER JOIN" not in sql
+    assert "game_types_1.name" in sql
+    assert "game_types_1.number_pool_size" in sql
+    assert "game_types_1.number_pick_count" in sql
+    assert "WHERE games.id = %(id_2)s::UUID" in sql
+    assert params["id_2"] == game_id
+
+
+class FakeScalarSession:
+    def __init__(self, result: Any) -> None:
+        self.result = result
+        self.queries: list[Select[Any]] = []
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    async def scalar(self, query: Select[Any]) -> Any:
+        self.queries.append(query)
+        return self.result
+
+
+async def test_get_game_returns_game(database: Database) -> None:
+    game = make_game_with_type()
+    session = FakeScalarSession(game)
+    database._sessionmaker = lambda: session  # type: ignore[assignment]
+
+    result = await database.get_game(game.id)
+
+    assert result is game
+    _, params = compile_query(session.queries[0])
+    assert params["id_2"] == game.id
+
+
+async def test_get_game_returns_none_for_unknown_id(database: Database) -> None:
+    database._sessionmaker = lambda: FakeScalarSession(None)  # type: ignore[assignment]
+
+    assert await database.get_game(uuid.uuid4()) is None

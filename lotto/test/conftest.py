@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from lotto.connectors.db import GameListResult
-from lotto.connectors.models import Game, GameStatus
+from lotto.connectors.models import Game, GameStatus, GameType
 
 GAME_TYPE_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 
@@ -28,6 +28,30 @@ def make_game(status: GameStatus = GameStatus.SCHEDULED, **overrides: Any) -> Ga
     }
     fields.update(overrides)
     return Game(**fields)
+
+
+def make_game_type(**overrides: Any) -> GameType:
+    fields: dict[str, Any] = {
+        "id": GAME_TYPE_ID,
+        "name": "Lotto",
+        "description": "Pick 6 numbers out of 49",
+        "number_pool_size": 49,
+        "number_pick_count": 6,
+        "ticket_price": 10,
+        "default_jackpot": 1000,
+        "is_active": True,
+    }
+    fields.update(overrides)
+    return GameType(**fields)
+
+
+def make_game_with_type(
+    status: GameStatus = GameStatus.SCHEDULED, **overrides: Any
+) -> Game:
+    game_type = make_game_type()
+    game = make_game(status, game_type_id=game_type.id, **overrides)
+    game.game_type = game_type
+    return game
 
 
 class FakeDatabase:
@@ -58,6 +82,10 @@ class FakeDatabase:
             }
         )
         return GameListResult(items=self.games, total=self.total)
+
+    async def get_game(self, game_id: uuid.UUID) -> Game | None:
+        self.calls.append({"game_id": game_id})
+        return next((game for game in self.games if game.id == game_id), None)
 
 
 @pytest.fixture

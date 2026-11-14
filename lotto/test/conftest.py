@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from lotto.connectors.db import GameListResult
+from lotto.connectors.db import GameListResult, NewGame
 from lotto.connectors.models import Game, GameStatus, GameType
 
 GAME_TYPE_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -61,6 +61,7 @@ class FakeDatabase:
         self.games = games or []
         self.total = len(self.games) if total is None else total
         self.calls: list[dict[str, Any]] = []
+        self.game_types: list[GameType] = []
 
     async def list_games(
         self,
@@ -87,7 +88,45 @@ class FakeDatabase:
         self.calls.append({"game_id": game_id})
         return next((game for game in self.games if game.id == game_id), None)
 
+    async def get_game_type(self, game_type_id: uuid.UUID) -> GameType | None:
+        return next((gt for gt in self.game_types if gt.id == game_type_id), None)
+
+    async def count_games_of_type(self, game_type_id: uuid.UUID) -> int:
+        return sum(1 for game in self.games if game.game_type_id == game_type_id)
+
+    async def create_game(self, data: NewGame) -> Game:
+        self.calls.append({"create_game": data})
+        game = make_game(
+            GameStatus.SCHEDULED,
+            game_type_id=data.game_type_id,
+            name=data.name,
+            ticket_price=data.ticket_price,
+            jackpot=data.jackpot,
+            scheduled_at=data.scheduled_at,
+            seed=data.seed,
+            seed_hash=data.seed_hash,
+            winning_numbers=None,
+        )
+        self.games.append(game)
+        return game
+
+
+class FakeBroker:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.published: list[tuple[str, dict[str, Any]]] = []
+
+    async def publish(self, routing_key: str, payload: dict[str, Any]) -> None:
+        if self.error is not None:
+            raise self.error
+        self.published.append((routing_key, payload))
+
 
 @pytest.fixture
 def fake_db() -> FakeDatabase:
     return FakeDatabase()
+
+
+@pytest.fixture
+def fake_broker() -> FakeBroker:
+    return FakeBroker()

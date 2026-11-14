@@ -8,13 +8,14 @@ from sqlalchemy.dialects import postgresql
 
 from lotto.connectors.db import (
     Database,
+    NewGame,
     build_count_games_query,
     build_get_game_query,
     build_list_games_query,
 )
-from lotto.connectors.models import GameStatus
+from lotto.connectors.models import Game, GameStatus, GameType
 
-from .conftest import GAME_TYPE_ID, make_game, make_game_with_type
+from .conftest import GAME_TYPE_ID, make_game, make_game_type, make_game_with_type
 
 DATE_FROM = datetime(2026, 11, 1, tzinfo=UTC)
 DATE_TO = datetime(2026, 11, 30, tzinfo=UTC)
@@ -206,3 +207,79 @@ async def test_get_game_returns_none_for_unknown_id(database: Database) -> None:
     database._sessionmaker = lambda: FakeScalarSession(None)  # type: ignore[assignment]
 
     assert await database.get_game(uuid.uuid4()) is None
+
+
+class FakeWriteSession:
+    def __init__(self, get_result: Any = None) -> None:
+        self.get_result = get_result
+        self.added: list[Any] = []
+        self.committed = False
+        self.get_calls: list[tuple[Any, Any]] = []
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    async def get(self, model: Any, key: Any) -> Any:
+        self.get_calls.append((model, key))
+        return self.get_result
+
+    def add(self, obj: Any) -> None:
+        self.added.append(obj)
+
+    async def commit(self) -> None:
+        self.committed = True
+
+
+async def test_get_game_type_reads_by_primary_key(database: Database) -> None:
+    game_type = make_game_type()
+    session = FakeWriteSession(get_result=game_type)
+    database._sessionmaker = lambda: session  # type: ignore[assignment]
+
+    result = await database.get_game_type(GAME_TYPE_ID)
+
+    assert result is game_type
+    assert session.get_calls == [(GameType, GAME_TYPE_ID)]
+
+
+async def test_count_games_of_type_filters_by_game_type(database: Database) -> None:
+    session = FakeScalarSession(3)
+    database._sessionmaker = lambda: session  # type: ignore[assignment]
+
+    assert await database.count_games_of_type(GAME_TYPE_ID) == 3
+    sql, params = compile_query(session.queries[0])
+    assert "count(*)" in sql
+    assert params["game_type_id_1"] == GAME_TYPE_ID
+    assert "status" not in sql
+
+
+async def test_create_game_inserts_scheduled_one_time_game(database: Database) -> None:
+    session = FakeWriteSession()
+    database._sessionmaker = lambda: session  # type: ignore[assignment]
+    data = NewGame(
+        game_type_id=GAME_TYPE_ID,
+        name="Lotto #1",
+        ticket_price=10,
+        jackpot=1000,
+        scheduled_at=DATE_TO,
+        seed="seed",
+        seed_hash="hash",
+    )
+
+    game = await database.create_game(data)
+
+    assert session.added == [game]
+    assert session.committed
+    assert isinstance(game, Game)
+    assert game.status is GameStatus.SCHEDULED
+    assert game.game_schedule_id is None
+    assert game.game_type_id == GAME_TYPE_ID
+    assert game.name == "Lotto #1"
+    assert game.ticket_price == 10
+    assert game.jackpot == 1000
+    assert game.scheduled_at == DATE_TO
+    assert game.seed == "seed"
+    assert game.seed_hash == "hash"
+    assert game.winning_numbers is None

@@ -2,19 +2,36 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 
-from lotto.connectors import get_database
+from lotto.connectors import get_broker, get_database
+from lotto.connectors.broker import MessageBroker
 from lotto.connectors.db import Database
 from lotto.connectors.models import GameStatus
 from lotto.handlers.handlers_v1 import (
+    GameCreate,
     GameDetails,
+    GameOut,
     GamesPage,
+    GameTypeNotFoundError,
+    InvalidGameError,
+    create_game_handler,
     get_game_handler,
     list_games_handler,
 )
 
 router = APIRouter(prefix="/v1")
+
+ADMIN_ROLE = "admin"
+
+
+def require_admin(
+    x_user_role: Annotated[str | None, Header()] = None,
+    x_user_id: Annotated[UUID | None, Header()] = None,
+) -> UUID | None:
+    if x_user_role != ADMIN_ROLE:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    return x_user_id
 
 
 @router.get("/games", description="Lists games (draws) for the dashboard.")
@@ -45,3 +62,28 @@ async def get_game(
     if game is None:
         raise HTTPException(status_code=404, detail="Game not found")
     return game
+
+
+@router.post(
+    "/games",
+    status_code=status.HTTP_201_CREATED,
+    description="Creates a one-time game.",
+    responses={
+        403: {"description": "The caller is not an admin"},
+        404: {"description": "Game type not found"},
+    },
+)
+async def create_game(
+    data: GameCreate,
+    admin_id: Annotated[UUID | None, Depends(require_admin)],
+    database: Annotated[Database, Depends(get_database)],
+    broker: Annotated[MessageBroker, Depends(get_broker)],
+) -> GameOut:
+    try:
+        return await create_game_handler(database, broker, data, admin_id)
+    except GameTypeNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except InvalidGameError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(e)
+        ) from e

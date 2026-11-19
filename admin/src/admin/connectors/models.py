@@ -1,8 +1,8 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime, Enum, String, Uuid
+from sqlalchemy import Date, DateTime, Enum, ForeignKey, Integer, String, Uuid
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -51,3 +51,61 @@ class AdminAction(Base):
     target_id: Mapped[uuid.UUID] = mapped_column(Uuid)
     description: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ReportType(StrEnum):
+    DAILY_SUMMARY = "daily_summary"
+    GAME_STATS = "game_stats"
+    USER_ACTIVITY = "user_activity"
+
+
+class Report(Base):
+    __tablename__ = "reports"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    created_by: Mapped[uuid.UUID] = mapped_column(Uuid)
+    type: Mapped[ReportType] = mapped_column(
+        Enum(ReportType, name="report_type", values_callable=_enum_values)
+    )
+    period_from: Mapped[date] = mapped_column(Date)
+    period_to: Mapped[date] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class DailySummaryReportRow(Base):
+    __tablename__ = "daily_summary_report_rows"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    report_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("reports.id"))
+    day: Mapped[date] = mapped_column(Date)
+    games_played: Mapped[int] = mapped_column(Integer)
+    active_players: Mapped[int] = mapped_column(Integer)
+    points_spent: Mapped[int] = mapped_column(Integer)
+    points_awarded: Mapped[int] = mapped_column(Integer)
+
+
+class GameStatsReportRow(Base):
+    __tablename__ = "game_stats_report_rows"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    report_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("reports.id"))
+    game_type_id: Mapped[uuid.UUID] = mapped_column(Uuid)
+    games_played: Mapped[int] = mapped_column(Integer)
+    coupons_sold: Mapped[int] = mapped_column(Integer)
+    points_spent: Mapped[int] = mapped_column(Integer)
+    points_awarded: Mapped[int] = mapped_column(Integer)
+
+
+class UserActivityReportRow(Base):
+    __tablename__ = "user_activity_report_rows"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    report_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("reports.id"))
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid)
+    coupons_bought: Mapped[int] = mapped_column(Integer)
+    points_spent: Mapped[int] = mapped_column(Integer)
+    points_won: Mapped[int] = mapped_column(Integer)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+ReportRow = DailySummaryReportRow | GameStatsReportRow | UserActivityReportRow

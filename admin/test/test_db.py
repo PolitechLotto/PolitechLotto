@@ -1,14 +1,22 @@
 import uuid
-from datetime import UTC, datetime
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from datetime import UTC, date, datetime
 from typing import Any, Self
 from unittest.mock import MagicMock
 
+import pytest
 from sqlalchemy.dialects import postgresql
 
 from admin.connectors.db import Database
-from admin.connectors.models import AdminActionType, TargetType
+from admin.connectors.models import AdminActionType, ReportType, TargetType
 
-from .factories import make_admin_action
+from .factories import (
+    make_admin_action,
+    make_daily_summary_row,
+    make_game_stats_row,
+    make_user_activity_row,
+)
 
 
 class FakeSession:
@@ -121,3 +129,97 @@ async def test_list_admin_actions_applies_filters_to_count_and_page() -> None:
     )
 
     assert [compile_sql(s) for s in session.statements] == expected
+
+
+class FakeWriteSession:
+    """Records what is added and flushed, and whether the transaction was committed."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, Any]] = []
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    @asynccontextmanager
+    async def begin(self) -> AsyncIterator[None]:
+        yield
+        self.events.append(("commit", None))
+
+    def add(self, instance: Any) -> None:
+        self.events.append(("add", instance))
+
+    def add_all(self, instances: list[Any]) -> None:
+        self.events.extend(("add", instance) for instance in instances)
+
+    async def flush(self) -> None:
+        self.events.append(("flush", None))
+
+
+async def test_create_report_saves_report_rows_and_action_in_one_transaction() -> None:
+    session = FakeWriteSession()
+    admin_id = uuid.UUID(int=1)
+    rows = [make_daily_summary_row(), make_daily_summary_row(day=date(2026, 11, 2))]
+
+    report = await make_database(session).create_report(
+        admin_id,
+        ReportType.DAILY_SUMMARY,
+        date(2026, 11, 1),
+        date(2026, 11, 2),
+        rows,
+    )
+
+    action = session.events[4][1]
+    assert session.events == [
+        ("add", report),
+        ("flush", None),
+        ("add", rows[0]),
+        ("add", rows[1]),
+        ("add", action),
+        ("commit", None),
+    ]
+    assert (
+        report.created_by,
+        report.type,
+        report.period_from,
+        report.period_to,
+        report.created_at.tzinfo,
+    ) == (admin_id, ReportType.DAILY_SUMMARY, date(2026, 11, 1), date(2026, 11, 2), UTC)
+    assert [row.report_id for row in rows] == [report.id, report.id]
+    assert (
+        action.admin_id,
+        action.action,
+        action.target_type,
+        action.target_id,
+        action.description,
+        action.created_at,
+    ) == (
+        admin_id,
+        AdminActionType.REPORT_GENERATED,
+        TargetType.REPORT,
+        report.id,
+        "Generated daily_summary report for 2026-11-01 - 2026-11-02.",
+        report.created_at,
+    )
+
+
+@pytest.mark.parametrize(
+    ("report_type", "make_row"),
+    [
+        (ReportType.GAME_STATS, make_game_stats_row),
+        (ReportType.USER_ACTIVITY, make_user_activity_row),
+    ],
+)
+async def test_create_report_saves_rows_of_any_type(
+    report_type: ReportType, make_row: Any
+) -> None:
+    session = FakeWriteSession()
+    row = make_row()
+
+    report = await make_database(session).create_report(
+        uuid.uuid4(), report_type, date(2026, 11, 1), date(2026, 11, 30), [row]
+    )
+
+    assert (session.events[2], row.report_id) == (("add", row), report.id)

@@ -295,3 +295,13 @@ async def list_reports_handler(
         items=[ReportView(**_report_view_fields(report)) for report in reports],
         total=total,
     )
+
+
+async def get_report_handler(
+    database: Database, report_id: uuid.UUID
+) -> ReportDetailsView | None:
+    found = await database.get_report(report_id)
+    if found is None:
+        return None
+    report, rows = found
+    return _report_details_view(report, rows)

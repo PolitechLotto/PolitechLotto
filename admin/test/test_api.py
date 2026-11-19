@@ -479,3 +479,75 @@ async def test_list_reports_rejects_invalid_query(
     response = await client.get(f"{prefix}/reports", params=params)
 
     assert (response.status_code, list_reports_handler.await_count) == (422, 0)
+
+
+@pytest.fixture
+def get_report_handler(monkeypatch: pytest.MonkeyPatch) -> Iterator[AsyncMock]:
+    mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(api_v1, "get_report_handler", mock)
+    yield mock
+
+
+async def test_get_report_returns_report_with_rows(
+    client: httpx.AsyncClient, get_report_handler: AsyncMock
+) -> None:
+    get_report_handler.return_value = make_report_details_view(
+        ReportType.DAILY_SUMMARY,
+        [
+            DailySummaryRowView(
+                day=date(2026, 11, 1),
+                games_played=4,
+                active_players=3,
+                points_spent=240,
+                points_awarded=100,
+            )
+        ],
+    )
+    expected = {
+        **REPORT_JSON,
+        "type": "daily_summary",
+        "rows": [
+            {
+                "day": "2026-11-01",
+                "games_played": 4,
+                "active_players": 3,
+                "points_spent": 240,
+                "points_awarded": 100,
+            }
+        ],
+    }
+
+    response = await client.get(f"{prefix}/reports/{REPORT_ID}")
+
+    assert (response.status_code, response.json()) == (200, expected)
+
+
+async def test_get_report_passes_id_to_handler(
+    client: httpx.AsyncClient, get_report_handler: AsyncMock
+) -> None:
+    get_report_handler.return_value = make_report_details_view(
+        ReportType.GAME_STATS, []
+    )
+
+    await client.get(f"{prefix}/reports/{REPORT_ID}")
+
+    assert get_report_handler.await_args_list == [call(database, uuid.UUID(REPORT_ID))]
+
+
+async def test_get_report_returns_404_for_unknown_id(
+    client: httpx.AsyncClient, get_report_handler: AsyncMock
+) -> None:
+    response = await client.get(f"{prefix}/reports/{REPORT_ID}")
+
+    assert (response.status_code, response.json()) == (
+        404,
+        {"detail": "Report not found."},
+    )
+
+
+async def test_get_report_rejects_invalid_id(
+    client: httpx.AsyncClient, get_report_handler: AsyncMock
+) -> None:
+    response = await client.get(f"{prefix}/reports/not-a-uuid")
+
+    assert (response.status_code, get_report_handler.await_count) == (422, 0)

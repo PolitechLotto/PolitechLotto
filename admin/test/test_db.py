@@ -270,3 +270,110 @@ async def test_list_reports_filters_by_type() -> None:
     await make_database(session).list_reports(ReportType.GAME_STATS, 10, 30)
 
     assert [compile_sql(s) for s in session.statements] == expected
+
+
+class FakeReportSession:
+    """Records executed statements: returns the report first, then its rows."""
+
+    def __init__(self, report: Any, rows: list[Any]) -> None:
+        self.statements: list[Any] = []
+        self._report = report
+        self._rows = rows
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    async def execute(self, statement: Any) -> MagicMock:
+        self.statements.append(statement)
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = self._report
+        result.scalars.return_value.all.return_value = self._rows
+        return result
+
+
+async def test_get_report_returns_report_and_rows() -> None:
+    report = make_report()
+    rows = [make_daily_summary_row()]
+    session = FakeReportSession(report, rows)
+
+    result = await make_database(session).get_report(report.id)
+
+    assert result == (report, rows)
+
+
+async def test_get_report_returns_none_for_unknown_id() -> None:
+    session = FakeReportSession(None, [])
+
+    result = await make_database(session).get_report(uuid.UUID(int=1))
+
+    assert (result, len(session.statements)) == (None, 1)
+
+
+@pytest.mark.parametrize(
+    ("report_type", "rows_query"),
+    [
+        (
+            ReportType.DAILY_SUMMARY,
+            (
+                "SELECT daily_summary_report_rows.id, daily_summary_report_rows.report_id,"
+                " daily_summary_report_rows.day, daily_summary_report_rows.games_played,"
+                " daily_summary_report_rows.active_players,"
+                " daily_summary_report_rows.points_spent,"
+                " daily_summary_report_rows.points_awarded"
+                " FROM daily_summary_report_rows"
+                " WHERE daily_summary_report_rows.report_id"
+                " = '00000000-0000-0000-0000-000000000001'"
+                " ORDER BY daily_summary_report_rows.day ASC"
+            ),
+        ),
+        (
+            ReportType.GAME_STATS,
+            (
+                "SELECT game_stats_report_rows.id, game_stats_report_rows.report_id,"
+                " game_stats_report_rows.game_type_id, game_stats_report_rows.games_played,"
+                " game_stats_report_rows.coupons_sold, game_stats_report_rows.points_spent,"
+                " game_stats_report_rows.points_awarded"
+                " FROM game_stats_report_rows"
+                " WHERE game_stats_report_rows.report_id"
+                " = '00000000-0000-0000-0000-000000000001'"
+                " ORDER BY game_stats_report_rows.coupons_sold DESC,"
+                " game_stats_report_rows.game_type_id ASC"
+            ),
+        ),
+        (
+            ReportType.USER_ACTIVITY,
+            (
+                "SELECT user_activity_report_rows.id, user_activity_report_rows.report_id,"
+                " user_activity_report_rows.user_id,"
+                " user_activity_report_rows.coupons_bought,"
+                " user_activity_report_rows.points_spent,"
+                " user_activity_report_rows.points_won,"
+                " user_activity_report_rows.last_seen_at"
+                " FROM user_activity_report_rows"
+                " WHERE user_activity_report_rows.report_id"
+                " = '00000000-0000-0000-0000-000000000001'"
+                " ORDER BY user_activity_report_rows.coupons_bought DESC,"
+                " user_activity_report_rows.user_id ASC"
+            ),
+        ),
+    ],
+)
+async def test_get_report_reads_rows_from_the_table_of_its_type(
+    report_type: ReportType, rows_query: str
+) -> None:
+    report = make_report(id=uuid.UUID(int=1), type=report_type)
+    session = FakeReportSession(report, [])
+    expected = [
+        (
+            f"SELECT {REPORT_COLUMNS} FROM reports"
+            " WHERE reports.id = '00000000-0000-0000-0000-000000000001'"
+        ),
+        rows_query,
+    ]
+
+    await make_database(session).get_report(report.id)
+
+    assert [compile_sql(s) for s in session.statements] == expected

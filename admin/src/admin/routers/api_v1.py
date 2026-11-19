@@ -23,6 +23,7 @@ from admin.connectors.services import (
 from admin.handlers.handlers_v1 import (
     InvalidReportPeriodError,
     create_report_handler,
+    get_report_handler,
     list_admin_actions_handler,
     list_reports_handler,
 )
@@ -192,3 +193,18 @@ async def list_reports(
         database, report_type=report_type, limit=limit, offset=offset
     )
     return ReportsPageResponse.model_validate(page)
+
+
+@router.get(
+    "/reports/{report_id}",
+    description="Returns one report with all its rows.",
+    responses={HTTPStatus.NOT_FOUND: {"description": "Report not found."}},
+)
+async def get_report(
+    database: Annotated[Database, Depends(get_database)],
+    report_id: uuid.UUID,
+) -> ReportDetailsResponse:
+    report = await get_report_handler(database, report_id)
+    if report is None:
+        raise HTTPException(HTTPStatus.NOT_FOUND, detail="Report not found.")
+    return ReportDetailsResponse.model_validate(report)

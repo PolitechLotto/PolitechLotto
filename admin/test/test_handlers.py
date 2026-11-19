@@ -7,12 +7,15 @@ import pytest
 from admin.connectors.models import AdminActionType, Report, ReportType, TargetType
 from admin.connectors.services import (
     AuthUser,
+    CouponCount,
     CouponStatsByDay,
     CouponStatsByGameType,
     CouponStatsByUser,
     GamesPlayedByDay,
     GamesPlayedByGameType,
     ServiceError,
+    UserStatus,
+    Wallet,
 )
 from admin.handlers.handlers_v1 import (
     AdminActionsPage,
@@ -20,6 +23,8 @@ from admin.handlers.handlers_v1 import (
     DailySummaryRowView,
     GameStatsRowView,
     InvalidReportPeriodError,
+    PlayersPage,
+    PlayerView,
     ReportDetailsView,
     ReportRowView,
     ReportsPage,
@@ -28,6 +33,7 @@ from admin.handlers.handlers_v1 import (
     create_report_handler,
     get_report_handler,
     list_admin_actions_handler,
+    list_players_handler,
     list_reports_handler,
 )
 
@@ -457,3 +463,115 @@ async def test_get_report_returns_none_for_unknown_id() -> None:
     view = await get_report_handler(database, REPORT_ID)
 
     assert view is None
+
+
+def make_auth_user(user_id: uuid.UUID, **overrides: object) -> AuthUser:
+    fields: dict = {
+        "id": user_id,
+        "username": f"gracz_{user_id.int}",
+        "email": f"gracz_{user_id.int}@example.com",
+        "role": "player",
+        "created_at": CREATED_AT,
+        "last_login_at": CREATED_AT,
+        "last_seen_at": LAST_SEEN_AT,
+        "is_online": False,
+    }
+    fields.update(overrides)
+    return AuthUser(**fields)
+
+
+def make_player_clients() -> Clients:
+    auth, wallet, betting = AsyncMock(), AsyncMock(), AsyncMock()
+    auth.list_users.return_value = (
+        [make_auth_user(USER_A, is_online=True), make_auth_user(USER_B)],
+        12,
+    )
+    wallet.get_wallets.return_value = [
+        Wallet(user_id=USER_B, balance=80, total_won=0),
+        Wallet(user_id=USER_A, balance=1250, total_won=900),
+    ]
+    betting.coupon_counts.return_value = [
+        CouponCount(user_id=USER_A, coupons_count=42),
+        CouponCount(user_id=USER_B, coupons_count=0),
+    ]
+    return auth, wallet, betting
+
+
+async def test_list_players_combines_users_wallets_and_coupon_counts() -> None:
+    auth, wallet, betting = make_player_clients()
+    expected = PlayersPage(
+        items=[
+            PlayerView(
+                user_id=USER_A,
+                username="gracz_11",
+                balance=1250,
+                coupons_count=42,
+                is_online=True,
+                last_login_at=CREATED_AT,
+            ),
+            PlayerView(
+                user_id=USER_B,
+                username="gracz_12",
+                balance=80,
+                coupons_count=0,
+                is_online=False,
+                last_login_at=CREATED_AT,
+            ),
+        ],
+        total=12,
+    )
+
+    page = await list_players_handler(auth, wallet, betting, UserStatus.ALL, 50, 0)
+
+    assert page == expected
+
+
+async def test_list_players_passes_query_to_auth_and_ids_to_the_others() -> None:
+    auth, wallet, betting = make_player_clients()
+
+    await list_players_handler(auth, wallet, betting, UserStatus.ONLINE, 10, 20)
+
+    assert (
+        auth.list_users.await_args_list,
+        wallet.get_wallets.await_args_list,
+        betting.coupon_counts.await_args_list,
+    ) == (
+        [call(UserStatus.ONLINE, 10, 20)],
+        [call([USER_A, USER_B])],
+        [call([USER_A, USER_B])],
+    )
+
+
+async def test_list_players_defaults_missing_wallet_and_count_to_zero() -> None:
+    auth, wallet, betting = make_player_clients()
+    wallet.get_wallets.return_value = []
+    betting.coupon_counts.return_value = []
+
+    page = await list_players_handler(auth, wallet, betting, UserStatus.ALL, 50, 0)
+
+    assert [(p.balance, p.coupons_count) for p in page.items] == [(0, 0), (0, 0)]
+
+
+async def test_list_players_skips_other_services_for_an_empty_page() -> None:
+    auth, wallet, betting = make_player_clients()
+    auth.list_users.return_value = ([], 12)
+
+    page = await list_players_handler(auth, wallet, betting, UserStatus.ALL, 50, 100)
+
+    assert (
+        page,
+        wallet.get_wallets.await_count,
+        betting.coupon_counts.await_count,
+    ) == (
+        PlayersPage(items=[], total=12),
+        0,
+        0,
+    )
+
+
+async def test_list_players_raises_when_a_service_fails() -> None:
+    auth, wallet, betting = make_player_clients()
+    wallet.get_wallets.side_effect = ServiceError("wallet is down")
+
+    with pytest.raises(ServiceError):
+        await list_players_handler(auth, wallet, betting, UserStatus.ALL, 50, 0)

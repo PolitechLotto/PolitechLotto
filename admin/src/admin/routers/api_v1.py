@@ -1,16 +1,31 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from http import HTTPStatus
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
-from admin.connectors import get_database
+from admin.connectors import (
+    get_auth_client,
+    get_betting_client,
+    get_database,
+    get_lotto_client,
+)
 from admin.connectors.db import Database
-from admin.connectors.models import AdminActionType, TargetType
-from admin.handlers.handlers_v1 import list_admin_actions_handler
-from admin.routers.auth import require_admin
+from admin.connectors.models import AdminActionType, ReportType, TargetType
+from admin.connectors.services import (
+    AuthClient,
+    BettingClient,
+    LottoClient,
+    ServiceError,
+)
+from admin.handlers.handlers_v1 import (
+    InvalidReportPeriodError,
+    create_report_handler,
+    list_admin_actions_handler,
+)
+from admin.routers.auth import AdminId, require_admin
 
 router = APIRouter(
     prefix="/v1",
@@ -63,3 +78,96 @@ async def list_admin_actions(
         offset=offset,
     )
     return AdminActionsPageResponse.model_validate(page)
+
+
+class CreateReportRequest(BaseModel):
+    type: ReportType
+    period_from: date
+    period_to: date
+
+
+class DailySummaryRowResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    day: date
+    games_played: int
+    active_players: int
+    points_spent: int
+    points_awarded: int
+
+
+class GameStatsRowResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    game_type_id: uuid.UUID
+    games_played: int
+    coupons_sold: int
+    points_spent: int
+    points_awarded: int
+
+
+class UserActivityRowResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: uuid.UUID
+    coupons_bought: int
+    points_spent: int
+    points_won: int
+    last_seen_at: datetime | None
+
+
+class ReportResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    type: ReportType
+    period_from: date
+    period_to: date
+    created_by: uuid.UUID
+    created_at: datetime
+
+
+class ReportDetailsResponse(ReportResponse):
+    rows: list[DailySummaryRowResponse | GameStatsRowResponse | UserActivityRowResponse]
+
+
+@router.post(
+    "/reports",
+    status_code=HTTPStatus.CREATED,
+    description="Generates a report from the statistics of the other services.",
+    responses={
+        HTTPStatus.UNPROCESSABLE_ENTITY: {
+            "description": "Invalid body, period_from after period_to, or a period"
+            " longer than 366 days."
+        },
+        HTTPStatus.BAD_GATEWAY: {"description": "Another service failed."},
+    },
+)
+async def create_report(
+    admin_id: AdminId,
+    body: CreateReportRequest,
+    database: Annotated[Database, Depends(get_database)],
+    lotto: Annotated[LottoClient, Depends(get_lotto_client)],
+    betting: Annotated[BettingClient, Depends(get_betting_client)],
+    auth: Annotated[AuthClient, Depends(get_auth_client)],
+) -> ReportDetailsResponse:
+    try:
+        report = await create_report_handler(
+            database,
+            lotto,
+            betting,
+            auth,
+            admin_id=admin_id,
+            report_type=body.type,
+            period_from=body.period_from,
+            period_to=body.period_to,
+        )
+    except InvalidReportPeriodError as error:
+        raise HTTPException(
+            HTTPStatus.UNPROCESSABLE_ENTITY, detail=str(error)
+        ) from error
+    except ServiceError as error:
+        raise HTTPException(
+            HTTPStatus.BAD_GATEWAY, detail="Another service failed."
+        ) from error
+    return ReportDetailsResponse.model_validate(report)

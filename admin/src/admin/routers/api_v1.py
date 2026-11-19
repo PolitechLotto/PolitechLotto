@@ -11,6 +11,7 @@ from admin.connectors import (
     get_betting_client,
     get_database,
     get_lotto_client,
+    get_wallet_client,
 )
 from admin.connectors.db import Database
 from admin.connectors.models import AdminActionType, ReportType, TargetType
@@ -19,12 +20,15 @@ from admin.connectors.services import (
     BettingClient,
     LottoClient,
     ServiceError,
+    UserStatus,
+    WalletClient,
 )
 from admin.handlers.handlers_v1 import (
     InvalidReportPeriodError,
     create_report_handler,
     get_report_handler,
     list_admin_actions_handler,
+    list_players_handler,
     list_reports_handler,
 )
 from admin.routers.auth import AdminId, require_admin
@@ -208,3 +212,45 @@ async def get_report(
     if report is None:
         raise HTTPException(HTTPStatus.NOT_FOUND, detail="Report not found.")
     return ReportDetailsResponse.model_validate(report)
+
+
+class PlayerResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: uuid.UUID
+    username: str
+    balance: int
+    coupons_count: int
+    is_online: bool
+    last_login_at: datetime | None
+
+
+class PlayersPageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    items: list[PlayerResponse]
+    total: int
+
+
+@router.get(
+    "/players",
+    description="Lists players with their balances and coupon counts.",
+    responses={HTTPStatus.BAD_GATEWAY: {"description": "Another service failed."}},
+)
+async def list_players(
+    auth: Annotated[AuthClient, Depends(get_auth_client)],
+    wallet: Annotated[WalletClient, Depends(get_wallet_client)],
+    betting: Annotated[BettingClient, Depends(get_betting_client)],
+    status: UserStatus = UserStatus.ALL,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> PlayersPageResponse:
+    try:
+        page = await list_players_handler(
+            auth, wallet, betting, status=status, limit=limit, offset=offset
+        )
+    except ServiceError as error:
+        raise HTTPException(
+            HTTPStatus.BAD_GATEWAY, detail="Another service failed."
+        ) from error
+    return PlayersPageResponse.model_validate(page)

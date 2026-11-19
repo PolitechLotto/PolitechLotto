@@ -1,13 +1,20 @@
 import os
 import uuid
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from .models import AdminAction, AdminActionType, TargetType
+from .models import (
+    AdminAction,
+    AdminActionType,
+    Report,
+    ReportRow,
+    ReportType,
+    TargetType,
+)
 
 DEFAULT_DATABASE_URL = "postgresql+asyncpg://admin:admin@localhost:5432/admin"
 
@@ -50,6 +57,44 @@ class Database:
             total = (await session.execute(count_query)).scalar_one()
             actions = (await session.execute(page_query)).scalars().all()
         return actions, total
+
+    async def create_report(
+        self,
+        admin_id: uuid.UUID,
+        report_type: ReportType,
+        period_from: date,
+        period_to: date,
+        rows: Sequence[ReportRow],
+    ) -> Report:
+        """Saves the report, its rows and the `report_generated` action in one transaction."""
+        now = datetime.now(UTC)
+        report = Report(
+            id=uuid.uuid4(),
+            created_by=admin_id,
+            type=report_type,
+            period_from=period_from,
+            period_to=period_to,
+            created_at=now,
+        )
+        for row in rows:
+            row.report_id = report.id
+        action = AdminAction(
+            id=uuid.uuid4(),
+            admin_id=admin_id,
+            action=AdminActionType.REPORT_GENERATED,
+            target_type=TargetType.REPORT,
+            target_id=report.id,
+            description=(
+                f"Generated {report_type} report for {period_from} - {period_to}."
+            ),
+            created_at=now,
+        )
+
+        async with self._session_factory() as session, session.begin():
+            session.add(report)
+            await session.flush()
+            session.add_all([*rows, action])
+        return report
 
 
 def _filter_admin_actions[Q: Select[Any]](

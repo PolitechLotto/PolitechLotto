@@ -6,10 +6,6 @@ from admin.connectors.db import Database
 from admin.connectors.models import AdminAction, AdminActionType, TargetType
 
 
-async def example_handler(database: Database) -> int:
-    return await database.get_random_int()
-
-
 @dataclass(frozen=True)
 class AdminActionView:
     id: uuid.UUID

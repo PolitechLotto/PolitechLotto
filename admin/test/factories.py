@@ -7,6 +7,8 @@ from admin.connectors.models import (
     AdminActionType,
     DailySummaryReportRow,
     GameStatsReportRow,
+    Report,
+    ReportType,
     TargetType,
     UserActivityReportRow,
 )
@@ -60,3 +62,16 @@ def make_user_activity_row(**overrides: Any) -> UserActivityReportRow:
     }
     fields.update(overrides)
     return UserActivityReportRow(**fields)
+
+
+def make_report(**overrides: Any) -> Report:
+    fields: dict[str, Any] = {
+        "id": uuid.uuid4(),
+        "created_by": uuid.uuid4(),
+        "type": ReportType.DAILY_SUMMARY,
+        "period_from": date(2026, 11, 1),
+        "period_to": date(2026, 11, 30),
+        "created_at": datetime(2026, 11, 19, 12, 0, tzinfo=UTC),
+    }
+    fields.update(overrides)
+    return Report(**fields)

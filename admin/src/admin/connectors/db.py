@@ -10,10 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from .models import (
     AdminAction,
     AdminActionType,
+    DailySummaryReportRow,
+    GameStatsReportRow,
     Report,
     ReportRow,
     ReportType,
     TargetType,
+    UserActivityReportRow,
 )
 
 DEFAULT_DATABASE_URL = "postgresql+asyncpg://admin:admin@localhost:5432/admin"
@@ -114,6 +117,47 @@ class Database:
             total = (await session.execute(count_query)).scalar_one()
             reports = (await session.execute(page_query)).scalars().all()
         return reports, total
+
+    async def get_report(
+        self, report_id: uuid.UUID
+    ) -> tuple[Report, Sequence[ReportRow]] | None:
+        """The report and its rows, from the table that matches its type."""
+        async with self._session_factory() as session:
+            report_query = select(Report).where(Report.id == report_id)
+            report = (await session.execute(report_query)).scalar_one_or_none()
+            if report is None:
+                return None
+            rows = (await session.execute(_report_rows_query(report))).scalars().all()
+        return report, rows
+
+
+def _report_rows_query(report: Report) -> Select[Any]:
+    """Rows in the same order as when the report was generated."""
+    match report.type:
+        case ReportType.DAILY_SUMMARY:
+            return (
+                select(DailySummaryReportRow)
+                .where(DailySummaryReportRow.report_id == report.id)
+                .order_by(DailySummaryReportRow.day.asc())
+            )
+        case ReportType.GAME_STATS:
+            return (
+                select(GameStatsReportRow)
+                .where(GameStatsReportRow.report_id == report.id)
+                .order_by(
+                    GameStatsReportRow.coupons_sold.desc(),
+                    GameStatsReportRow.game_type_id.asc(),
+                )
+            )
+        case ReportType.USER_ACTIVITY:
+            return (
+                select(UserActivityReportRow)
+                .where(UserActivityReportRow.report_id == report.id)
+                .order_by(
+                    UserActivityReportRow.coupons_bought.desc(),
+                    UserActivityReportRow.user_id.asc(),
+                )
+            )
 
 
 def _filter_admin_actions[Q: Select[Any]](

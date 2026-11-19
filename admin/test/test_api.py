@@ -22,6 +22,8 @@ from admin.handlers.handlers_v1 import (
     InvalidReportPeriodError,
     ReportDetailsView,
     ReportRowView,
+    ReportsPage,
+    ReportView,
     UserActivityRowView,
 )
 from admin.main import create_sub_app
@@ -412,3 +414,68 @@ async def test_create_report_requires_admin(
     )
 
     assert (response.status_code, create_report_handler.await_count) == (403, 0)
+
+
+@pytest.fixture
+def list_reports_handler(monkeypatch: pytest.MonkeyPatch) -> Iterator[AsyncMock]:
+    mock = AsyncMock(return_value=ReportsPage(items=[], total=0))
+    monkeypatch.setattr(api_v1, "list_reports_handler", mock)
+    yield mock
+
+
+async def test_list_reports_returns_paginated_reports(
+    client: httpx.AsyncClient, list_reports_handler: AsyncMock
+) -> None:
+    list_reports_handler.return_value = ReportsPage(
+        items=[
+            ReportView(
+                id=uuid.UUID(REPORT_ID),
+                type=ReportType.GAME_STATS,
+                period_from=date(2026, 11, 1),
+                period_to=date(2026, 11, 30),
+                created_by=uuid.UUID(ADMIN_ID),
+                created_at=datetime(2026, 11, 19, 12, 0, tzinfo=UTC),
+            )
+        ],
+        total=4,
+    )
+    expected = {"items": [{**REPORT_JSON, "type": "game_stats"}], "total": 4}
+
+    response = await client.get(f"{prefix}/reports")
+
+    assert (response.status_code, response.json()) == (200, expected)
+
+
+async def test_list_reports_uses_default_query(
+    client: httpx.AsyncClient, list_reports_handler: AsyncMock
+) -> None:
+    await client.get(f"{prefix}/reports")
+
+    assert list_reports_handler.await_args_list == [
+        call(database, report_type=None, limit=50, offset=0)
+    ]
+
+
+async def test_list_reports_passes_query_to_handler(
+    client: httpx.AsyncClient, list_reports_handler: AsyncMock
+) -> None:
+    await client.get(
+        f"{prefix}/reports",
+        params={"type": "user_activity", "limit": 200, "offset": 10},
+    )
+
+    assert list_reports_handler.await_args_list == [
+        call(database, report_type=ReportType.USER_ACTIVITY, limit=200, offset=10)
+    ]
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{"type": "weekly"}, {"limit": 0}, {"limit": 201}, {"offset": -1}],
+)
+async def test_list_reports_rejects_invalid_query(
+    client: httpx.AsyncClient, list_reports_handler: AsyncMock, params: dict
+) -> None:
+    response = await client.get(f"{prefix}/reports", params=params)
+
+    assert (response.status_code, list_reports_handler.await_count) == (422, 0)

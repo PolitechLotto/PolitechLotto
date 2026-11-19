@@ -24,6 +24,7 @@ from admin.handlers.handlers_v1 import (
     InvalidReportPeriodError,
     create_report_handler,
     list_admin_actions_handler,
+    list_reports_handler,
 )
 from admin.routers.auth import AdminId, require_admin
 
@@ -171,3 +172,23 @@ async def create_report(
             HTTPStatus.BAD_GATEWAY, detail="Another service failed."
         ) from error
     return ReportDetailsResponse.model_validate(report)
+
+
+class ReportsPageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    items: list[ReportResponse]
+    total: int
+
+
+@router.get("/reports", description="Lists generated reports, newest first.")
+async def list_reports(
+    database: Annotated[Database, Depends(get_database)],
+    report_type: Annotated[ReportType | None, Query(alias="type")] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> ReportsPageResponse:
+    page = await list_reports_handler(
+        database, report_type=report_type, limit=limit, offset=offset
+    )
+    return ReportsPageResponse.model_validate(page)

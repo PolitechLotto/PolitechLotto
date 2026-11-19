@@ -1,11 +1,29 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, call
 
-from admin.connectors.models import AdminActionType, TargetType
+import pytest
+
+from admin.connectors.models import AdminActionType, Report, ReportType, TargetType
+from admin.connectors.services import (
+    AuthUser,
+    CouponStatsByDay,
+    CouponStatsByGameType,
+    CouponStatsByUser,
+    GamesPlayedByDay,
+    GamesPlayedByGameType,
+    ServiceError,
+)
 from admin.handlers.handlers_v1 import (
     AdminActionsPage,
     AdminActionView,
+    DailySummaryRowView,
+    GameStatsRowView,
+    InvalidReportPeriodError,
+    ReportDetailsView,
+    ReportRowView,
+    UserActivityRowView,
+    create_report_handler,
     list_admin_actions_handler,
 )
 
@@ -68,3 +86,290 @@ async def test_list_admin_actions_returns_page_of_views() -> None:
     )
 
     assert page == expected
+
+
+ADMIN_ID = uuid.UUID(int=99)
+REPORT_ID = uuid.UUID(int=500)
+GAME_TYPE_A = uuid.UUID(int=1)
+GAME_TYPE_B = uuid.UUID(int=2)
+USER_A = uuid.UUID(int=11)
+USER_B = uuid.UUID(int=12)
+CREATED_AT = datetime(2026, 11, 19, 12, 0, tzinfo=UTC)
+LAST_SEEN_AT = datetime(2026, 11, 18, 19, 45, tzinfo=UTC)
+
+Clients = tuple[AsyncMock, AsyncMock, AsyncMock]
+
+
+def make_report_database() -> AsyncMock:
+    """create_report returns a report built from its arguments."""
+
+    async def create_report(
+        admin_id: uuid.UUID,
+        report_type: ReportType,
+        period_from: date,
+        period_to: date,
+        rows: list,
+    ) -> Report:
+        return Report(
+            id=REPORT_ID,
+            created_by=admin_id,
+            type=report_type,
+            period_from=period_from,
+            period_to=period_to,
+            created_at=CREATED_AT,
+        )
+
+    database = AsyncMock()
+    database.create_report.side_effect = create_report
+    return database
+
+
+def make_clients() -> Clients:
+    lotto, betting, auth = AsyncMock(), AsyncMock(), AsyncMock()
+    lotto.games_by_day.return_value = [
+        GamesPlayedByDay(day=date(2026, 11, 2), games_played=3),
+        GamesPlayedByDay(day=date(2026, 11, 1), games_played=4),
+    ]
+    betting.coupon_stats_by_day.return_value = [
+        CouponStatsByDay(
+            day=date(2026, 11, 1),
+            coupons_sold=24,
+            points_spent=240,
+            points_awarded=100,
+            active_players=3,
+        )
+    ]
+    lotto.games_by_game_type.return_value = [
+        GamesPlayedByGameType(game_type_id=GAME_TYPE_A, games_played=8),
+        GamesPlayedByGameType(game_type_id=GAME_TYPE_B, games_played=4),
+    ]
+    betting.coupon_stats_by_game_type.return_value = [
+        CouponStatsByGameType(
+            game_type_id=GAME_TYPE_B,
+            coupons_sold=50,
+            points_spent=500,
+            points_awarded=200,
+        )
+    ]
+    betting.coupon_stats_by_user.return_value = [
+        CouponStatsByUser(
+            user_id=USER_A, coupons_sold=2, points_spent=20, points_awarded=0
+        ),
+        CouponStatsByUser(
+            user_id=USER_B, coupons_sold=30, points_spent=300, points_awarded=150
+        ),
+    ]
+    auth.get_users.return_value = [
+        AuthUser(
+            id=USER_B,
+            username="szczesciarz",
+            email="szczesciarz@example.com",
+            role="player",
+            created_at=CREATED_AT,
+            last_login_at=CREATED_AT,
+            last_seen_at=LAST_SEEN_AT,
+            is_online=True,
+        )
+    ]
+    return lotto, betting, auth
+
+
+async def create_report(
+    database: AsyncMock,
+    report_type: ReportType,
+    period_from: date = date(2026, 11, 1),
+    period_to: date = date(2026, 11, 30),
+    clients: Clients | None = None,
+) -> ReportDetailsView:
+    lotto, betting, auth = clients or make_clients()
+    return await create_report_handler(
+        database,
+        lotto,
+        betting,
+        auth,
+        ADMIN_ID,
+        report_type,
+        period_from,
+        period_to,
+    )
+
+
+def expected_report(
+    report_type: ReportType, rows: list[ReportRowView]
+) -> ReportDetailsView:
+    return ReportDetailsView(
+        id=REPORT_ID,
+        type=report_type,
+        period_from=date(2026, 11, 1),
+        period_to=date(2026, 11, 30),
+        created_by=ADMIN_ID,
+        created_at=CREATED_AT,
+        rows=rows,
+    )
+
+
+async def test_create_daily_summary_merges_games_and_coupons_by_day() -> None:
+    expected = expected_report(
+        ReportType.DAILY_SUMMARY,
+        [
+            DailySummaryRowView(
+                day=date(2026, 11, 1),
+                games_played=4,
+                active_players=3,
+                points_spent=240,
+                points_awarded=100,
+            ),
+            DailySummaryRowView(
+                day=date(2026, 11, 2),
+                games_played=3,
+                active_players=0,
+                points_spent=0,
+                points_awarded=0,
+            ),
+        ],
+    )
+
+    report = await create_report(make_report_database(), ReportType.DAILY_SUMMARY)
+
+    assert report == expected
+
+
+async def test_create_game_stats_merges_by_game_type_most_coupons_first() -> None:
+    expected = expected_report(
+        ReportType.GAME_STATS,
+        [
+            GameStatsRowView(
+                game_type_id=GAME_TYPE_B,
+                games_played=4,
+                coupons_sold=50,
+                points_spent=500,
+                points_awarded=200,
+            ),
+            GameStatsRowView(
+                game_type_id=GAME_TYPE_A,
+                games_played=8,
+                coupons_sold=0,
+                points_spent=0,
+                points_awarded=0,
+            ),
+        ],
+    )
+
+    report = await create_report(make_report_database(), ReportType.GAME_STATS)
+
+    assert report == expected
+
+
+async def test_create_user_activity_adds_last_seen_from_auth() -> None:
+    clients = make_clients()
+    expected = expected_report(
+        ReportType.USER_ACTIVITY,
+        [
+            UserActivityRowView(
+                user_id=USER_B,
+                coupons_bought=30,
+                points_spent=300,
+                points_won=150,
+                last_seen_at=LAST_SEEN_AT,
+            ),
+            UserActivityRowView(
+                user_id=USER_A,
+                coupons_bought=2,
+                points_spent=20,
+                points_won=0,
+                last_seen_at=None,
+            ),
+        ],
+    )
+
+    report = await create_report(
+        make_report_database(), ReportType.USER_ACTIVITY, clients=clients
+    )
+
+    assert (report, clients[2].get_users.await_args_list) == (
+        expected,
+        [call([USER_A, USER_B])],
+    )
+
+
+async def test_create_report_saves_the_collected_rows() -> None:
+    database = make_report_database()
+
+    await create_report(database, ReportType.DAILY_SUMMARY)
+
+    args = database.create_report.await_args.args
+    assert args[:4] == (
+        ADMIN_ID,
+        ReportType.DAILY_SUMMARY,
+        date(2026, 11, 1),
+        date(2026, 11, 30),
+    )
+    assert [(row.day, row.games_played, row.points_spent) for row in args[4]] == [
+        (date(2026, 11, 1), 4, 240),
+        (date(2026, 11, 2), 3, 0),
+    ]
+
+
+async def test_create_report_passes_period_to_services() -> None:
+    lotto, betting, auth = make_clients()
+
+    await create_report(
+        make_report_database(), ReportType.GAME_STATS, clients=(lotto, betting, auth)
+    )
+
+    period = call(date(2026, 11, 1), date(2026, 11, 30))
+    assert (
+        lotto.games_by_game_type.await_args_list,
+        betting.coupon_stats_by_game_type.await_args_list,
+    ) == ([period], [period])
+
+
+async def test_create_report_accepts_the_longest_period() -> None:
+    database = make_report_database()
+
+    await create_report(
+        database, ReportType.GAME_STATS, date(2028, 1, 1), date(2028, 12, 31)
+    )
+
+    assert database.create_report.await_count == 1
+
+
+@pytest.mark.parametrize(
+    ("period_from", "period_to", "message"),
+    [
+        (date(2026, 11, 2), date(2026, 11, 1), "period_from is after period_to."),
+        (date(2026, 1, 1), date(2027, 1, 2), "The period is longer than 366 days."),
+    ],
+)
+async def test_create_report_rejects_invalid_period(
+    period_from: date, period_to: date, message: str
+) -> None:
+    database = make_report_database()
+    lotto, betting, auth = make_clients()
+
+    with pytest.raises(InvalidReportPeriodError, match=message):
+        await create_report(
+            database,
+            ReportType.DAILY_SUMMARY,
+            period_from,
+            period_to,
+            clients=(lotto, betting, auth),
+        )
+
+    assert (database.create_report.await_count, lotto.games_by_day.await_count) == (
+        0,
+        0,
+    )
+
+
+async def test_create_report_does_not_save_when_a_service_fails() -> None:
+    database = make_report_database()
+    lotto, betting, auth = make_clients()
+    betting.coupon_stats_by_day.side_effect = ServiceError("betting is down")
+
+    with pytest.raises(ServiceError):
+        await create_report(
+            database, ReportType.DAILY_SUMMARY, clients=(lotto, betting, auth)
+        )
+
+    assert database.create_report.await_count == 0

@@ -11,15 +11,18 @@ from admin.connectors import (
     get_betting_client,
     get_database,
     get_lotto_client,
+    get_wallet_client,
 )
 from admin.connectors.models import AdminActionType, ReportType, TargetType
-from admin.connectors.services import ServiceError
+from admin.connectors.services import ServiceError, UserStatus
 from admin.handlers.handlers_v1 import (
     AdminActionsPage,
     AdminActionView,
     DailySummaryRowView,
     GameStatsRowView,
     InvalidReportPeriodError,
+    PlayersPage,
+    PlayerView,
     ReportDetailsView,
     ReportRowView,
     ReportsPage,
@@ -37,10 +40,12 @@ database = MagicMock()
 lotto = MagicMock()
 betting = MagicMock()
 auth = MagicMock()
+wallet = MagicMock()
 app.dependency_overrides[get_database] = lambda: database
 app.dependency_overrides[get_lotto_client] = lambda: lotto
 app.dependency_overrides[get_betting_client] = lambda: betting
 app.dependency_overrides[get_auth_client] = lambda: auth
+app.dependency_overrides[get_wallet_client] = lambda: wallet
 
 ADMIN_ID = "33333333-3333-3333-3333-333333333333"
 ADMIN_HEADERS = {"X-User-Id": ADMIN_ID, "X-User-Roles": "player,admin"}
@@ -551,3 +556,92 @@ async def test_get_report_rejects_invalid_id(
     response = await client.get(f"{prefix}/reports/not-a-uuid")
 
     assert (response.status_code, get_report_handler.await_count) == (422, 0)
+
+
+@pytest.fixture
+def players_handler(monkeypatch: pytest.MonkeyPatch) -> Iterator[AsyncMock]:
+    mock = AsyncMock(return_value=PlayersPage(items=[], total=0))
+    monkeypatch.setattr(api_v1, "list_players_handler", mock)
+    yield mock
+
+
+async def test_list_players_returns_paginated_players(
+    client: httpx.AsyncClient, players_handler: AsyncMock
+) -> None:
+    players_handler.return_value = PlayersPage(
+        items=[
+            PlayerView(
+                user_id=uuid.UUID("66666666-6666-6666-6666-666666666666"),
+                username="szczesciarz",
+                balance=1250,
+                coupons_count=42,
+                is_online=True,
+                last_login_at=datetime(2026, 11, 18, 19, 0, tzinfo=UTC),
+            )
+        ],
+        total=3,
+    )
+    expected = {
+        "items": [
+            {
+                "user_id": "66666666-6666-6666-6666-666666666666",
+                "username": "szczesciarz",
+                "balance": 1250,
+                "coupons_count": 42,
+                "is_online": True,
+                "last_login_at": "2026-11-18T19:00:00Z",
+            }
+        ],
+        "total": 3,
+    }
+
+    response = await client.get(f"{prefix}/players")
+
+    assert (response.status_code, response.json()) == (200, expected)
+
+
+async def test_list_players_uses_default_query(
+    client: httpx.AsyncClient, players_handler: AsyncMock
+) -> None:
+    await client.get(f"{prefix}/players")
+
+    assert players_handler.await_args_list == [
+        call(auth, wallet, betting, status=UserStatus.ALL, limit=50, offset=0)
+    ]
+
+
+async def test_list_players_passes_query_to_handler(
+    client: httpx.AsyncClient, players_handler: AsyncMock
+) -> None:
+    await client.get(
+        f"{prefix}/players", params={"status": "offline", "limit": 200, "offset": 5}
+    )
+
+    assert players_handler.await_args_list == [
+        call(auth, wallet, betting, status=UserStatus.OFFLINE, limit=200, offset=5)
+    ]
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{"status": "away"}, {"limit": 0}, {"limit": 201}, {"offset": -1}],
+)
+async def test_list_players_rejects_invalid_query(
+    client: httpx.AsyncClient, players_handler: AsyncMock, params: dict
+) -> None:
+    response = await client.get(f"{prefix}/players", params=params)
+
+    assert (response.status_code, players_handler.await_count) == (422, 0)
+
+
+async def test_list_players_returns_502_when_a_service_fails(
+    client: httpx.AsyncClient, players_handler: AsyncMock
+) -> None:
+    players_handler.side_effect = ServiceError("wallet is down")
+
+    response = await client.get(f"{prefix}/players")
+
+    assert (response.status_code, response.json()) == (
+        502,
+        {"detail": "Another service failed."},
+    )

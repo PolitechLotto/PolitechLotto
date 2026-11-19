@@ -8,6 +8,7 @@ method with an HTTP call, and raise `ServiceError` when the service fails or doe
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from enum import StrEnum
 
 
 class ServiceError(Exception):
@@ -87,8 +88,27 @@ class CouponStatsByUser:
     points_awarded: int
 
 
+@dataclass(frozen=True)
+class CouponCount:
+    user_id: uuid.UUID
+    coupons_count: int
+
+
+FAKE_COUPON_COUNTS = {FAKE_USER_IDS[0]: 42, FAKE_USER_IDS[1]: 7}
+
+
 class BettingClient:
-    """betting `GET /api/betting/v1/statistics` (POL-108)."""
+    """betting `GET /api/betting/v1/statistics` (POL-108) and
+    `GET /api/betting/v1/statistics/coupon-counts` (POL-107)."""
+
+    async def coupon_counts(self, user_ids: list[uuid.UUID]) -> list[CouponCount]:
+        """Coupon counts of the given users. Users with no coupons get 0."""
+        return [
+            CouponCount(
+                user_id=user_id, coupons_count=FAKE_COUPON_COUNTS.get(user_id, 0)
+            )
+            for user_id in user_ids
+        ]
 
     async def coupon_stats_by_day(
         self, period_from: date, period_to: date
@@ -187,10 +207,50 @@ FAKE_USERS = (
 )
 
 
+class UserStatus(StrEnum):
+    ALL = "all"
+    ONLINE = "online"
+    OFFLINE = "offline"
+
+
 class AuthClient:
     """auth users, as in `GET /api/auth/v1/users` (POL-74)."""
+
+    async def list_users(
+        self, status: UserStatus, limit: int, offset: int
+    ) -> tuple[list[AuthUser], int]:
+        """A page of users and the total count of users with that status."""
+        users = [
+            user
+            for user in FAKE_USERS
+            if status == UserStatus.ALL
+            or user.is_online == (status == UserStatus.ONLINE)
+        ]
+        return users[offset : offset + limit], len(users)
 
     async def get_users(self, user_ids: list[uuid.UUID]) -> list[AuthUser]:
         """Users with the given IDs. Auth has no ticket for this lookup yet."""
         wanted = set(user_ids)
         return [user for user in FAKE_USERS if user.id in wanted]
+
+
+@dataclass(frozen=True)
+class Wallet:
+    user_id: uuid.UUID
+    balance: int
+    total_won: int
+
+
+FAKE_WALLETS = (
+    Wallet(user_id=FAKE_USER_IDS[0], balance=1250, total_won=900),
+    Wallet(user_id=FAKE_USER_IDS[1], balance=80, total_won=0),
+    Wallet(user_id=FAKE_USER_IDS[2], balance=100, total_won=0),
+)
+
+
+class WalletClient:
+    """wallet `GET /api/wallet/v1/wallets` (POL-94)."""
+
+    async def get_wallets(self, user_ids: list[uuid.UUID]) -> list[Wallet]:
+        wanted = set(user_ids)
+        return [wallet for wallet in FAKE_WALLETS if wallet.user_id in wanted]

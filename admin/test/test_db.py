@@ -15,6 +15,7 @@ from .factories import (
     make_admin_action,
     make_daily_summary_row,
     make_game_stats_row,
+    make_report,
     make_user_activity_row,
 )
 
@@ -223,3 +224,49 @@ async def test_create_report_saves_rows_of_any_type(
     )
 
     assert (session.events[2], row.report_id) == (("add", row), report.id)
+
+
+REPORT_COLUMNS = (
+    "reports.id, reports.created_by, reports.type, reports.period_from,"
+    " reports.period_to, reports.created_at"
+)
+
+
+async def test_list_reports_returns_reports_and_total() -> None:
+    reports = [make_report(), make_report()]
+    session = FakeSession(total=5, rows=reports)
+
+    result, total = await make_database(session).list_reports(None, 50, 0)
+
+    assert (list(result), total) == (reports, 5)
+
+
+async def test_list_reports_without_filter_sorts_newest_first() -> None:
+    session = FakeSession(total=0, rows=[])
+    expected = [
+        "SELECT count(*) AS count_1 FROM reports",
+        (
+            f"SELECT {REPORT_COLUMNS} FROM reports"
+            " ORDER BY reports.created_at DESC, reports.id DESC LIMIT 50 OFFSET 0"
+        ),
+    ]
+
+    await make_database(session).list_reports(None, 50, 0)
+
+    assert [compile_sql(s) for s in session.statements] == expected
+
+
+async def test_list_reports_filters_by_type() -> None:
+    session = FakeSession(total=0, rows=[])
+    where = "WHERE reports.type = 'game_stats'"
+    expected = [
+        f"SELECT count(*) AS count_1 FROM reports {where}",
+        (
+            f"SELECT {REPORT_COLUMNS} FROM reports {where}"
+            " ORDER BY reports.created_at DESC, reports.id DESC LIMIT 10 OFFSET 30"
+        ),
+    ]
+
+    await make_database(session).list_reports(ReportType.GAME_STATS, 10, 30)
+
+    assert [compile_sql(s) for s in session.statements] == expected

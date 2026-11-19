@@ -96,6 +96,25 @@ class Database:
             session.add_all([*rows, action])
         return report
 
+    async def list_reports(
+        self, report_type: ReportType | None, limit: int, offset: int
+    ) -> tuple[Sequence[Report], int]:
+        count_query = select(func.count()).select_from(Report)
+        page_query = select(Report)
+        if report_type is not None:
+            count_query = count_query.where(Report.type == report_type)
+            page_query = page_query.where(Report.type == report_type)
+        page_query = (
+            page_query.order_by(Report.created_at.desc(), Report.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+
+        async with self._session_factory() as session:
+            total = (await session.execute(count_query)).scalar_one()
+            reports = (await session.execute(page_query)).scalars().all()
+        return reports, total
+
 
 def _filter_admin_actions[Q: Select[Any]](
     query: Q,

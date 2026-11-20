@@ -4,9 +4,12 @@ from typing import Any
 
 import pytest
 
-from lotto.connectors.models import Game, GameListResult, GameStatus
+from lotto.connectors.models import Game, GameListResult, GameStatus, GameType
 
 GAME_TYPE_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
+GAME_TYPE_NAME = "Lotto"
+NUMBER_POOL_SIZE = 49
+NUMBER_PICK_COUNT = 6
 GAME_NAME = "Lotto 6/49"
 TICKET_PRICE = 10
 JACKPOT = 1000
@@ -34,6 +37,27 @@ def make_game(status: GameStatus = GameStatus.SCHEDULED, **overrides: Any) -> Ga
     }
     fields.update(overrides)
     return Game(**fields)
+
+
+def make_game_type() -> GameType:
+    return GameType(
+        id=GAME_TYPE_ID,
+        name=GAME_TYPE_NAME,
+        description="Pick 6 numbers out of 49",
+        number_pool_size=NUMBER_POOL_SIZE,
+        number_pick_count=NUMBER_PICK_COUNT,
+        ticket_price=TICKET_PRICE,
+        default_jackpot=JACKPOT,
+        is_active=True,
+    )
+
+
+def make_game_with_type(
+    status: GameStatus = GameStatus.SCHEDULED, **overrides: Any
+) -> Game:
+    game = make_game(status, **overrides)
+    game.game_type = make_game_type()
+    return game
 
 
 class FakeDatabase:
@@ -64,6 +88,10 @@ class FakeDatabase:
             }
         )
         return GameListResult(items=self.games, total=self.total)
+
+    async def get_game(self, game_id: uuid.UUID) -> Game | None:
+        self.calls.append({"game_id": game_id})
+        return next((game for game in self.games if game.id == game_id), None)
 
 
 @pytest.fixture

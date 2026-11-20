@@ -4,10 +4,10 @@ from uuid import UUID
 from lotto.connectors.db import Database
 from lotto.connectors.models import GameStatus
 
-from .models import Game, GamesPage
+from .models import Game, GameDetails, GamesPage
 
 
-def _hide_unrevealed(game: Game) -> Game:
+def _hide_unrevealed[T: Game](game: T) -> T:
     if game.status is GameStatus.FINISHED:
         return game
     return game.model_copy(update={"seed": None, "winning_numbers": None})
@@ -27,3 +27,10 @@ async def list_games_handler(
     )
     games = [_hide_unrevealed(Game.model_validate(game)) for game in result.items]
     return GamesPage(games=games, total=result.total, limit=limit, offset=offset)
+
+
+async def get_game_handler(database: Database, game_id: UUID) -> GameDetails | None:
+    game = await database.get_game(game_id)
+    if game is None:
+        return None
+    return _hide_unrevealed(GameDetails.model_validate(game))

@@ -28,3 +28,16 @@ class GamesPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class GameTypeSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    number_pool_size: int
+    number_pick_count: int
+
+
+class GameDetails(Game):
+    game_type: GameTypeSummary

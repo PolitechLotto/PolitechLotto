@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from lotto.connectors.models import GameStatus
 
@@ -41,3 +41,11 @@ class GameTypeSummary(BaseModel):
 
 class GameDetails(Game):
     game_type: GameTypeSummary
+
+
+class GameCreate(BaseModel):
+    game_type_id: UUID
+    scheduled_at: AwareDatetime
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    ticket_price: int | None = Field(default=None, ge=0)
+    jackpot: int | None = Field(default=None, ge=0)

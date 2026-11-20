@@ -85,3 +85,14 @@ class Game(Base):
 class GameListResult:
     items: list[Game]
     total: int
+
+
+@dataclass(frozen=True)
+class NewGame:
+    game_type_id: uuid.UUID
+    name: str
+    ticket_price: int
+    jackpot: int
+    scheduled_at: datetime
+    seed: str
+    seed_hash: str

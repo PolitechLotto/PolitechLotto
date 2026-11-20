@@ -43,6 +43,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator:
     connectors = get_connectors_object()
     yield
     await connectors.db.close()
+    await connectors.broker.close()
 
 
 app = create_app(lifespan=lifespan, title="lotto")

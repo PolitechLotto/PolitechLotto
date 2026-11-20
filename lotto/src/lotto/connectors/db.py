@@ -5,7 +5,7 @@ from sqlalchemy import ColumnElement, Select, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import joinedload
 
-from .models import Game, GameListResult, GameStatus
+from .models import Game, GameListResult, GameStatus, GameType, NewGame
 
 
 def _games_filters(
@@ -89,3 +89,29 @@ class Database:
     async def get_game(self, game_id: uuid.UUID) -> Game | None:
         async with self._sessionmaker() as session:
             return await session.scalar(build_get_game_query(game_id))
+
+    async def get_game_type(self, game_type_id: uuid.UUID) -> GameType | None:
+        async with self._sessionmaker() as session:
+            return await session.get(GameType, game_type_id)
+
+    async def count_games_of_type(self, game_type_id: uuid.UUID) -> int:
+        query = build_count_games_query(None, game_type_id, None, None)
+        async with self._sessionmaker() as session:
+            return await session.scalar(query) or 0
+
+    async def create_game(self, data: NewGame) -> Game:
+        game = Game(
+            game_type_id=data.game_type_id,
+            game_schedule_id=None,
+            name=data.name,
+            ticket_price=data.ticket_price,
+            jackpot=data.jackpot,
+            status=GameStatus.SCHEDULED,
+            scheduled_at=data.scheduled_at,
+            seed_hash=data.seed_hash,
+            seed=data.seed,
+        )
+        async with self._sessionmaker() as session:
+            session.add(game)
+            await session.commit()
+        return game

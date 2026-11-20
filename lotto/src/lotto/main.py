@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, Response, status
 
 from .connectors import get_connectors_object
-from .routers.api_v1 import router
+from .routers import api_v1
 
 
 def create_sub_app(
@@ -40,9 +40,10 @@ def create_app(
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator:
-    get_connectors_object()
+    connectors = get_connectors_object()
     yield
+    await connectors.db.close()
 
 
 app = create_app(lifespan=lifespan, title="lotto")
-app.mount("/api/", create_sub_app(title="API", routers=[router]))
+app.mount("/api/", create_sub_app(title="API", routers=[api_v1.router]))

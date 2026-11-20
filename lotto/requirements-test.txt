@@ -3,3 +3,7 @@ fastapi==0.143.0
 sqlalchemy==2.1.4
 alembic==1.20.0
 httpx==0.28.1
+asyncpg==0.32.0
+pytest==8.4.2
+pytest-asyncio==1.4.0
+coverage==7.17.3

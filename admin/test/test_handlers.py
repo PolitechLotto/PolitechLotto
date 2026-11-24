@@ -22,12 +22,15 @@ from admin.handlers.handlers_v1 import (
     InvalidReportPeriodError,
     ReportDetailsView,
     ReportRowView,
+    ReportsPage,
+    ReportView,
     UserActivityRowView,
     create_report_handler,
     list_admin_actions_handler,
+    list_reports_handler,
 )
 
-from .factories import make_admin_action
+from .factories import make_admin_action, make_report
 
 
 async def test_list_admin_actions_passes_filters_to_database() -> None:
@@ -373,3 +376,37 @@ async def test_create_report_does_not_save_when_a_service_fails() -> None:
         )
 
     assert database.create_report.await_count == 0
+
+
+async def test_list_reports_passes_filter_to_database() -> None:
+    database = AsyncMock()
+    database.list_reports.return_value = ([], 0)
+
+    await list_reports_handler(database, ReportType.USER_ACTIVITY, 10, 20)
+
+    assert database.list_reports.await_args_list == [
+        call(ReportType.USER_ACTIVITY, 10, 20)
+    ]
+
+
+async def test_list_reports_returns_page_of_views_without_rows() -> None:
+    report = make_report()
+    database = AsyncMock()
+    database.list_reports.return_value = ([report], 9)
+    expected = ReportsPage(
+        items=[
+            ReportView(
+                id=report.id,
+                type=report.type,
+                period_from=report.period_from,
+                period_to=report.period_to,
+                created_by=report.created_by,
+                created_at=report.created_at,
+            )
+        ],
+        total=9,
+    )
+
+    page = await list_reports_handler(database, None, 50, 0)
+
+    assert page == expected

@@ -279,3 +279,19 @@ async def create_report_handler(
         admin_id, report_type, period_from, period_to, rows
     )
     return _report_details_view(report, rows)
+
+
+@dataclass(frozen=True)
+class ReportsPage:
+    items: list[ReportView]
+    total: int
+
+
+async def list_reports_handler(
+    database: Database, report_type: ReportType | None, limit: int, offset: int
+) -> ReportsPage:
+    reports, total = await database.list_reports(report_type, limit, offset)
+    return ReportsPage(
+        items=[ReportView(**_report_view_fields(report)) for report in reports],
+        total=total,
+    )

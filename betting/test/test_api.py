@@ -9,6 +9,7 @@ import pytest
 from betting.connectors import get_database, get_lotto, get_wallet
 from betting.connectors.models import CouponStatus
 from betting.exceptions import (
+    CouponNotFound,
     GameNotFound,
     GameNotOpen,
     InsufficientFunds,
@@ -309,5 +310,93 @@ async def test_create_coupon_maps_errors(
         headers=HEADERS,
         json={"game_id": GAME_ID, "is_quick_pick": True},
     )
+
+    assert (response.status_code, response.json()) == expected
+
+
+COUPON_ID = "11111111-1111-1111-1111-111111111111"
+
+
+@pytest.fixture
+def get_handler(monkeypatch: pytest.MonkeyPatch) -> Iterator[AsyncMock]:
+    mock = AsyncMock(return_value=make_coupon_response())
+    monkeypatch.setattr(api_v1, "get_coupon_handler", mock)
+    yield mock
+
+
+async def test_get_coupon_returns_coupon(
+    client: httpx.AsyncClient, get_handler: AsyncMock
+) -> None:
+    expected = {
+        "id": COUPON_ID,
+        "created_at": "2026-11-01T17:00:00Z",
+        "game_id": "22222222-2222-2222-2222-222222222222",
+        "game_type_id": "33333333-3333-3333-3333-333333333333",
+        "numbers": [1, 2, 3, 4, 5, 6],
+        "is_quick_pick": True,
+        "price": 10,
+        "status": "active",
+        "hits": None,
+        "points_won": None,
+    }
+
+    response = await client.get(f"{prefix}/coupons/{COUPON_ID}", headers=HEADERS)
+
+    assert (response.status_code, response.json()) == (200, expected)
+
+
+@pytest.mark.parametrize(
+    ("headers", "role"),
+    [
+        (HEADERS, None),
+        ({**HEADERS, "X-User-Role": "player"}, "player"),
+        ({**HEADERS, "X-User-Role": "admin"}, "admin"),
+    ],
+    ids=["no-role", "player", "admin"],
+)
+async def test_get_coupon_passes_caller_to_handler(
+    client: httpx.AsyncClient,
+    get_handler: AsyncMock,
+    headers: dict,
+    role: str | None,
+) -> None:
+    expected = [
+        call(
+            database,
+            caller_id=uuid.UUID(CALLER_ID),
+            caller_role=role,
+            coupon_id=uuid.UUID(COUPON_ID),
+        )
+    ]
+
+    await client.get(f"{prefix}/coupons/{COUPON_ID}", headers=headers)
+
+    assert get_handler.await_args_list == expected
+
+
+@pytest.mark.parametrize(
+    ("headers", "coupon_id"),
+    [
+        ({}, COUPON_ID),
+        ({"X-User-Id": "not-a-uuid"}, COUPON_ID),
+        (HEADERS, "not-a-uuid"),
+    ],
+    ids=["no-user", "invalid-user-id", "invalid-coupon-id"],
+)
+async def test_get_coupon_rejects_invalid_request(
+    client: httpx.AsyncClient, get_handler: AsyncMock, headers: dict, coupon_id: str
+) -> None:
+    response = await client.get(f"{prefix}/coupons/{coupon_id}", headers=headers)
+
+    assert (response.status_code, get_handler.await_count) == (422, 0)
+
+
+async def test_get_coupon_returns_404_for_missing_coupon(
+    client: httpx.AsyncClient, get_handler: AsyncMock
+) -> None:
+    get_handler.side_effect = CouponNotFound
+    expected = (404, {"detail": "Coupon not found."})
+
+    response = await client.get(f"{prefix}/coupons/{COUPON_ID}", headers=HEADERS)
 
     assert (response.status_code, response.json()) == expected

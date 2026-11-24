@@ -53,6 +53,11 @@ class Database:
             )
             return result.scalars().all()
 
+    async def get_coupon(self, coupon_id: uuid.UUID) -> Coupon | None:
+        async with self._session_factory() as session:
+            result = await session.execute(select(Coupon).where(Coupon.id == coupon_id))
+            return result.scalar_one_or_none()
+
     async def create_coupon(
         self,
         id: uuid.UUID,

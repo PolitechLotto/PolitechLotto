@@ -8,6 +8,7 @@ import pytest
 from betting.connectors.lotto import LottoGame, LottoGameType
 from betting.connectors.models import Coupon, CouponStatus
 from betting.exceptions import (
+    CouponNotFound,
     GameNotFound,
     GameNotOpen,
     InsufficientFunds,
@@ -20,6 +21,7 @@ from betting.handlers.handlers_v1 import (
     CouponResponse,
     CouponsPageResponse,
     create_coupon_handler,
+    get_coupon_handler,
     list_coupons_handler,
 )
 
@@ -333,3 +335,53 @@ async def test_create_coupon_does_not_charge_when_game_lookup_fails(
         )
 
     assert wallet.charge.await_count == 0
+
+
+def make_getting_database(coupon: Coupon | None) -> AsyncMock:
+    database = AsyncMock()
+    database.get_coupon.return_value = coupon
+    return database
+
+
+async def test_get_coupon_reads_coupon_by_id() -> None:
+    database = make_getting_database(make_coupon(user_id=CALLER_ID))
+
+    await get_coupon_handler(database, CALLER_ID, "player", COUPON_ID)
+
+    assert database.get_coupon.await_args_list == [call(COUPON_ID)]
+
+
+@pytest.mark.parametrize(
+    ("owner_id", "role"),
+    [(CALLER_ID, "player"), (CALLER_ID, None), (OTHER_USER_ID, "admin")],
+    ids=["owner", "owner-without-role", "admin"],
+)
+async def test_get_coupon_returns_coupon_to_owner_or_admin(
+    owner_id: uuid.UUID, role: str | None
+) -> None:
+    coupon = make_coupon(user_id=owner_id)
+
+    response = await get_coupon_handler(
+        make_getting_database(coupon), CALLER_ID, role, coupon.id
+    )
+
+    assert response == expected_response(coupon)
+
+
+@pytest.mark.parametrize(
+    ("coupon", "role"),
+    [
+        (None, "player"),
+        (None, "admin"),
+        (make_coupon(user_id=OTHER_USER_ID), "player"),
+        (make_coupon(user_id=OTHER_USER_ID), None),
+    ],
+    ids=["missing", "missing-admin", "other-player", "other-player-without-role"],
+)
+async def test_get_coupon_raises_not_found_for_missing_or_foreign_coupon(
+    coupon: Coupon | None, role: str | None
+) -> None:
+    with pytest.raises(CouponNotFound):
+        await get_coupon_handler(
+            make_getting_database(coupon), CALLER_ID, role, COUPON_ID
+        )

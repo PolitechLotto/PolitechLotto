@@ -26,11 +26,12 @@ from admin.handlers.handlers_v1 import (
     ReportView,
     UserActivityRowView,
     create_report_handler,
+    get_report_handler,
     list_admin_actions_handler,
     list_reports_handler,
 )
 
-from .factories import make_admin_action, make_report
+from .factories import make_admin_action, make_game_stats_row, make_report
 
 
 async def test_list_admin_actions_passes_filters_to_database() -> None:
@@ -410,3 +411,49 @@ async def test_list_reports_returns_page_of_views_without_rows() -> None:
     page = await list_reports_handler(database, None, 50, 0)
 
     assert page == expected
+
+
+async def test_get_report_passes_id_to_database() -> None:
+    database = AsyncMock()
+    database.get_report.return_value = None
+
+    await get_report_handler(database, REPORT_ID)
+
+    assert database.get_report.await_args_list == [call(REPORT_ID)]
+
+
+async def test_get_report_returns_report_with_rows() -> None:
+    report = make_report(id=REPORT_ID, created_by=ADMIN_ID, created_at=CREATED_AT)
+    row = make_game_stats_row(game_type_id=GAME_TYPE_A)
+    database = AsyncMock()
+    database.get_report.return_value = (report, [row])
+    expected = ReportDetailsView(
+        id=REPORT_ID,
+        type=report.type,
+        period_from=date(2026, 11, 1),
+        period_to=date(2026, 11, 30),
+        created_by=ADMIN_ID,
+        created_at=CREATED_AT,
+        rows=[
+            GameStatsRowView(
+                game_type_id=GAME_TYPE_A,
+                games_played=4,
+                coupons_sold=48,
+                points_spent=480,
+                points_awarded=150,
+            )
+        ],
+    )
+
+    view = await get_report_handler(database, REPORT_ID)
+
+    assert view == expected
+
+
+async def test_get_report_returns_none_for_unknown_id() -> None:
+    database = AsyncMock()
+    database.get_report.return_value = None
+
+    view = await get_report_handler(database, REPORT_ID)
+
+    assert view is None

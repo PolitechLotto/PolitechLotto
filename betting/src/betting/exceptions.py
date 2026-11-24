@@ -1,0 +1,2 @@
+class InvalidDateRange(Exception):
+    pass

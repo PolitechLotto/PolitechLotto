@@ -1,16 +1,42 @@
 import uuid
-from typing import Annotated
+from typing import Annotated, Self
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pydantic import AwareDatetime
+from pydantic import AwareDatetime, BaseModel, model_validator
 
-from betting.connectors import get_database
+from betting.connectors import get_database, get_lotto, get_wallet
 from betting.connectors.db import Database
+from betting.connectors.lotto import LottoClient
 from betting.connectors.models import CouponStatus
-from betting.exceptions import InvalidDateRange
-from betting.handlers.handlers_v1 import CouponsPageResponse, list_coupons_handler
+from betting.connectors.wallet import WalletClient
+from betting.exceptions import (
+    GameNotFound,
+    GameNotOpen,
+    InsufficientFunds,
+    InvalidDateRange,
+    InvalidNumbers,
+    UpstreamError,
+)
+from betting.handlers.handlers_v1 import (
+    CouponResponse,
+    CouponsPageResponse,
+    create_coupon_handler,
+    list_coupons_handler,
+)
 
 router = APIRouter(prefix="/v1")
+
+
+class CreateCouponRequest(BaseModel):
+    game_id: uuid.UUID
+    numbers: list[int] | None = None
+    is_quick_pick: bool = False
+
+    @model_validator(mode="after")
+    def numbers_xor_quick_pick(self) -> Self:
+        if (self.numbers is None) == (not self.is_quick_pick):
+            raise ValueError("Send either `numbers` or `is_quick_pick: true`.")
+        return self
 
 
 @router.get(
@@ -46,4 +72,46 @@ async def list_coupons(
     except InvalidDateRange as error:
         raise HTTPException(
             status_code=422, detail="`from` must not be after `to`."
+        ) from error
+
+
+@router.post(
+    "/coupons",
+    status_code=201,
+    description="Buys a coupon for a game. The price is charged from the wallet.",
+    responses={
+        404: {"description": "Game not found."},
+        409: {"description": "Not enough points."},
+        502: {"description": "Lotto or wallet failed."},
+    },
+)
+async def create_coupon(
+    database: Annotated[Database, Depends(get_database)],
+    lotto: Annotated[LottoClient, Depends(get_lotto)],
+    wallet: Annotated[WalletClient, Depends(get_wallet)],
+    x_user_id: Annotated[uuid.UUID, Header()],
+    request: CreateCouponRequest,
+) -> CouponResponse:
+    try:
+        return await create_coupon_handler(
+            database,
+            lotto,
+            wallet,
+            user_id=x_user_id,
+            game_id=request.game_id,
+            numbers=None if request.is_quick_pick else request.numbers,
+        )
+    except GameNotFound as error:
+        raise HTTPException(status_code=404, detail="Game not found.") from error
+    except InsufficientFunds as error:
+        raise HTTPException(status_code=409, detail="Not enough points.") from error
+    except GameNotOpen as error:
+        raise HTTPException(
+            status_code=422, detail="The game is not open for betting."
+        ) from error
+    except InvalidNumbers as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except UpstreamError as error:
+        raise HTTPException(
+            status_code=502, detail=f"The {error} service failed."
         ) from error

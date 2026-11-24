@@ -17,7 +17,12 @@ from betting.exceptions import (
     InvalidNumbers,
     UpstreamError,
 )
-from betting.handlers.handlers_v1 import CouponResponse, CouponsPageResponse
+from betting.handlers.handlers_v1 import (
+    CouponResponse,
+    CouponsPageResponse,
+    GameCouponResponse,
+    GameCouponsPageResponse,
+)
 from betting.main import create_sub_app
 from betting.routers import api_v1
 from betting.routers.api_v1 import router
@@ -400,3 +405,99 @@ async def test_get_coupon_returns_404_for_missing_coupon(
     response = await client.get(f"{prefix}/coupons/{COUPON_ID}", headers=HEADERS)
 
     assert (response.status_code, response.json()) == expected
+
+
+@pytest.fixture
+def game_handler(monkeypatch: pytest.MonkeyPatch) -> Iterator[AsyncMock]:
+    mock = AsyncMock(return_value=GameCouponsPageResponse(items=[]))
+    monkeypatch.setattr(api_v1, "list_game_coupons_handler", mock)
+    yield mock
+
+
+async def test_list_game_coupons_returns_paginated_coupons(
+    client: httpx.AsyncClient, game_handler: AsyncMock
+) -> None:
+    game_handler.return_value = GameCouponsPageResponse(
+        items=[
+            GameCouponResponse(
+                id=uuid.UUID(COUPON_ID),
+                created_at=datetime(2026, 11, 1, 17, 0, tzinfo=UTC),
+                user_id=uuid.UUID(CALLER_ID),
+                numbers=[1, 2, 3, 4, 5, 6],
+                is_quick_pick=False,
+                status=CouponStatus.WON,
+                hits=6,
+                points_won=1000,
+            )
+        ]
+    )
+    expected = {
+        "items": [
+            {
+                "id": COUPON_ID,
+                "created_at": "2026-11-01T17:00:00Z",
+                "user_id": CALLER_ID,
+                "numbers": [1, 2, 3, 4, 5, 6],
+                "is_quick_pick": False,
+                "status": "won",
+                "hits": 6,
+                "points_won": 1000,
+            }
+        ]
+    }
+
+    response = await client.get(f"{prefix}/games/{GAME_ID}/coupons")
+
+    assert (response.status_code, response.json()) == (200, expected)
+
+
+async def test_list_game_coupons_uses_default_query(
+    client: httpx.AsyncClient, game_handler: AsyncMock
+) -> None:
+    expected = [
+        call(database, game_id=uuid.UUID(GAME_ID), status=None, limit=50, offset=0)
+    ]
+
+    await client.get(f"{prefix}/games/{GAME_ID}/coupons")
+
+    assert game_handler.await_args_list == expected
+
+
+async def test_list_game_coupons_passes_query_to_handler(
+    client: httpx.AsyncClient, game_handler: AsyncMock
+) -> None:
+    expected = [
+        call(
+            database,
+            game_id=uuid.UUID(GAME_ID),
+            status=CouponStatus.WON,
+            limit=200,
+            offset=20,
+        )
+    ]
+
+    await client.get(
+        f"{prefix}/games/{GAME_ID}/coupons",
+        params={"status": "won", "limit": 200, "offset": 20},
+    )
+
+    assert game_handler.await_args_list == expected
+
+
+@pytest.mark.parametrize(
+    ("game_id", "params"),
+    [
+        ("not-a-uuid", {}),
+        (GAME_ID, {"status": "pending"}),
+        (GAME_ID, {"limit": 0}),
+        (GAME_ID, {"limit": 201}),
+        (GAME_ID, {"offset": -1}),
+    ],
+    ids=["invalid-game-id", "invalid-status", "limit-0", "limit-201", "offset-neg"],
+)
+async def test_list_game_coupons_rejects_invalid_query(
+    client: httpx.AsyncClient, game_handler: AsyncMock, game_id: str, params: dict
+) -> None:
+    response = await client.get(f"{prefix}/games/{game_id}/coupons", params=params)
+
+    assert (response.status_code, game_handler.await_count) == (422, 0)

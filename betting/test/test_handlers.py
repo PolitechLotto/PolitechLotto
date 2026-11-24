@@ -20,9 +20,12 @@ from betting.handlers import handlers_v1
 from betting.handlers.handlers_v1 import (
     CouponResponse,
     CouponsPageResponse,
+    GameCouponResponse,
+    GameCouponsPageResponse,
     create_coupon_handler,
     get_coupon_handler,
     list_coupons_handler,
+    list_game_coupons_handler,
 )
 
 from .factories import make_coupon
@@ -385,3 +388,68 @@ async def test_get_coupon_raises_not_found_for_missing_or_foreign_coupon(
         await get_coupon_handler(
             make_getting_database(coupon), CALLER_ID, role, COUPON_ID
         )
+
+
+def make_game_database(coupons: list[Coupon]) -> AsyncMock:
+    database = AsyncMock()
+    database.list_coupons_for_game.return_value = coupons
+    return database
+
+
+def expected_game_coupon(coupon: Coupon, **overrides: object) -> GameCouponResponse:
+    fields: dict = {
+        "id": coupon.id,
+        "created_at": coupon.created_at,
+        "user_id": coupon.user_id,
+        "numbers": coupon.numbers,
+        "is_quick_pick": coupon.is_quick_pick,
+        "status": coupon.status,
+        "hits": coupon.hits,
+        "points_won": coupon.points_won,
+    }
+    fields.update(overrides)
+    return GameCouponResponse(**fields)
+
+
+async def test_list_game_coupons_passes_filters_to_database() -> None:
+    database = make_game_database([])
+    expected = [call(game_id=GAME_ID, status=CouponStatus.WON, limit=10, offset=20)]
+
+    await list_game_coupons_handler(database, GAME_ID, CouponStatus.WON, 10, 20)
+
+    assert database.list_coupons_for_game.await_args_list == expected
+
+
+@pytest.mark.parametrize(
+    "status", [CouponStatus.WON, CouponStatus.LOST, CouponStatus.REFUNDED]
+)
+async def test_list_game_coupons_shows_numbers_of_settled_coupons(
+    status: CouponStatus,
+) -> None:
+    coupon = make_coupon(status=status)
+    expected = GameCouponsPageResponse(items=[expected_game_coupon(coupon)])
+
+    page = await list_game_coupons_handler(
+        make_game_database([coupon]), GAME_ID, None, 50, 0
+    )
+
+    assert page == expected
+
+
+async def test_list_game_coupons_hides_numbers_of_active_coupons() -> None:
+    coupon = make_coupon(status=CouponStatus.ACTIVE, hits=None, points_won=None)
+    expected = GameCouponsPageResponse(
+        items=[expected_game_coupon(coupon, numbers=None)]
+    )
+
+    page = await list_game_coupons_handler(
+        make_game_database([coupon]), GAME_ID, None, 50, 0
+    )
+
+    assert page == expected
+
+
+async def test_list_game_coupons_returns_empty_page() -> None:
+    page = await list_game_coupons_handler(make_game_database([]), GAME_ID, None, 50, 0)
+
+    assert page == GameCouponsPageResponse(items=[])

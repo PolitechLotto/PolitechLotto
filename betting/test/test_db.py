@@ -244,3 +244,54 @@ async def test_get_coupon_returns_none_for_unknown_id() -> None:
     result = await make_database(FakeSession(coupons=[])).get_coupon(uuid.uuid4())
 
     assert result is None
+
+
+GAME_FILTER = "WHERE coupons.game_id = '00000000-0000-0000-0000-00000000000b'"
+
+WINNERS_FIRST = (
+    "ORDER BY CASE WHEN (coupons.status = 'won') THEN 0 ELSE 1 END,"
+    " coupons.points_won DESC NULLS LAST, coupons.created_at ASC, coupons.id ASC"
+)
+
+
+async def test_list_coupons_for_game_returns_coupons() -> None:
+    coupons = [make_coupon(), make_coupon()]
+    session = FakeSession(coupons=coupons)
+
+    result = await make_database(session).list_coupons_for_game(
+        game_id=uuid.UUID(int=11), status=None, limit=50, offset=0
+    )
+
+    assert list(result) == coupons
+
+
+async def test_list_coupons_for_game_sorts_winners_first() -> None:
+    session = FakeSession(coupons=[])
+    expected = [
+        (
+            f"SELECT {COUPON_COLUMNS} FROM coupons {GAME_FILTER}"
+            f" {WINNERS_FIRST} LIMIT 50 OFFSET 0"
+        )
+    ]
+
+    await make_database(session).list_coupons_for_game(
+        game_id=uuid.UUID(int=11), status=None, limit=50, offset=0
+    )
+
+    assert [compile_sql(s) for s in session.statements] == expected
+
+
+async def test_list_coupons_for_game_filters_by_status() -> None:
+    session = FakeSession(coupons=[])
+    expected = [
+        (
+            f"SELECT {COUPON_COLUMNS} FROM coupons {GAME_FILTER}"
+            f" AND coupons.status = 'won' {WINNERS_FIRST} LIMIT 20 OFFSET 40"
+        )
+    ]
+
+    await make_database(session).list_coupons_for_game(
+        game_id=uuid.UUID(int=11), status=CouponStatus.WON, limit=20, offset=40
+    )
+
+    assert [compile_sql(s) for s in session.statements] == expected

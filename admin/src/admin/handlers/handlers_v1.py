@@ -17,7 +17,13 @@ from admin.connectors.models import (
     TargetType,
     UserActivityReportRow,
 )
-from admin.connectors.services import AuthClient, BettingClient, LottoClient
+from admin.connectors.services import (
+    AuthClient,
+    BettingClient,
+    LottoClient,
+    UserStatus,
+    WalletClient,
+)
 
 MAX_REPORT_DAYS = 366
 
@@ -305,3 +311,54 @@ async def get_report_handler(
         return None
     report, rows = found
     return _report_details_view(report, rows)
+
+
+@dataclass(frozen=True)
+class PlayerView:
+    user_id: uuid.UUID
+    username: str
+    balance: int
+    coupons_count: int
+    is_online: bool
+    last_login_at: datetime | None
+
+
+@dataclass(frozen=True)
+class PlayersPage:
+    items: list[PlayerView]
+    total: int
+
+
+async def list_players_handler(
+    auth: AuthClient,
+    wallet: WalletClient,
+    betting: BettingClient,
+    status: UserStatus,
+    limit: int,
+    offset: int,
+) -> PlayersPage:
+    """A page of users from auth, with balances from wallet and coupon counts from betting.
+
+    Raises `ServiceError` when a service fails.
+    """
+    users, total = await auth.list_users(status, limit, offset)
+    if not users:
+        return PlayersPage(items=[], total=total)
+    user_ids = [user.id for user in users]
+    wallets, coupon_counts = await asyncio.gather(
+        wallet.get_wallets(user_ids), betting.coupon_counts(user_ids)
+    )
+    balances = {item.user_id: item.balance for item in wallets}
+    counts = {item.user_id: item.coupons_count for item in coupon_counts}
+    items = [
+        PlayerView(
+            user_id=user.id,
+            username=user.username,
+            balance=balances.get(user.id, 0),
+            coupons_count=counts.get(user.id, 0),
+            is_online=user.is_online,
+            last_login_at=user.last_login_at,
+        )
+        for user in users
+    ]
+    return PlayersPage(items=items, total=total)

@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -5,7 +6,7 @@ import pytest
 from sqlalchemy import Select
 from sqlalchemy.dialects import postgresql
 
-from lotto.connectors.db import build_list_games_query
+from lotto.connectors.db import build_get_game_query, build_list_games_query
 from lotto.connectors.models import GameStatus
 
 from .conftest import GAME_TYPE_ID
@@ -55,3 +56,16 @@ def test_list_query_applies_all_filters_and_pagination() -> None:
     assert params["scheduled_at_2"] == DATE_TO
     assert params["param_1"] == LIMIT
     assert params["param_2"] == OFFSET
+
+
+def test_get_game_query_inner_joins_game_type_and_filters_by_id() -> None:
+    game_id = uuid.uuid4()
+
+    sql, params = compile_query(build_get_game_query(game_id))
+
+    assert (
+        "FROM games JOIN game_types AS game_types_1 "
+        "ON game_types_1.id = games.game_type_id" in sql
+    )
+    assert "WHERE games.id = %(id_2)s::UUID" in sql
+    assert params["id_2"] == game_id

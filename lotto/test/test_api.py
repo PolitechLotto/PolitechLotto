@@ -6,7 +6,7 @@ from typing import Any
 import httpx
 import pytest
 
-from lotto.connectors import get_database
+from lotto.connectors import get_broker, get_database
 from lotto.connectors.models import Game, GameStatus
 from lotto.main import create_sub_app
 from lotto.routers.api_v1 import router
@@ -16,8 +16,10 @@ from .conftest import (
     GAME_TYPE_NAME,
     NUMBER_PICK_COUNT,
     NUMBER_POOL_SIZE,
+    FakeBroker,
     FakeDatabase,
     make_game,
+    make_game_type,
     make_game_with_type,
 )
 
@@ -37,6 +39,10 @@ GAME_TYPE_JSON = {
     "number_pool_size": NUMBER_POOL_SIZE,
     "number_pick_count": NUMBER_PICK_COUNT,
 }
+ADMIN_ID = "22222222-2222-2222-2222-222222222222"
+ADMIN_HEADERS = {"X-User-Role": "admin", "X-User-Id": ADMIN_ID}
+CUSTOM_NAME = "Mikolajkowe"
+FUTURE_SCHEDULED_AT_JSON = "2099-01-01T18:00:00Z"
 
 
 def game_json(game: Game, **overrides: Any) -> dict[str, Any]:
@@ -227,3 +233,136 @@ async def test_get_game_rejects_invalid_id(
 
     assert response.status_code == 422
     assert fake_db.calls == []
+
+
+@pytest.fixture
+async def write_client(
+    fake_db: FakeDatabase, fake_broker: FakeBroker
+) -> AsyncIterator[httpx.AsyncClient]:
+    fake_db.game_types = [make_game_type()]
+    app = create_sub_app(title="API", routers=[router])
+    app.dependency_overrides[get_database] = lambda: fake_db
+    app.dependency_overrides[get_broker] = lambda: fake_broker
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        yield client
+
+
+def game_body(**overrides: Any) -> dict[str, Any]:
+    return {
+        "game_type_id": str(GAME_TYPE_ID),
+        "scheduled_at": FUTURE_SCHEDULED_AT_JSON,
+    } | overrides
+
+
+async def test_create_game_returns_201_without_seed(
+    write_client: httpx.AsyncClient, fake_db: FakeDatabase
+) -> None:
+    response = await write_client.post(
+        URL, json=game_body(name=CUSTOM_NAME), headers=ADMIN_HEADERS
+    )
+
+    stored = fake_db.games[-1]
+    expected_response = game_json(
+        stored,
+        name=CUSTOM_NAME,
+        scheduled_at=FUTURE_SCHEDULED_AT_JSON,
+        seed=None,
+        winning_numbers=None,
+    )
+    assert response.status_code == 201
+    assert response.json() == expected_response
+
+
+async def test_create_game_passes_admin_id_to_published_event(
+    write_client: httpx.AsyncClient, fake_broker: FakeBroker
+) -> None:
+    await write_client.post(URL, json=game_body(), headers=ADMIN_HEADERS)
+
+    _, payload = fake_broker.published[0]
+    assert payload["created_by"] == ADMIN_ID
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [{}, {"X-User-Role": "player"}, {"X-User-Role": "ADMIN"}],
+)
+async def test_create_game_requires_admin(
+    write_client: httpx.AsyncClient,
+    fake_db: FakeDatabase,
+    headers: dict[str, str],
+) -> None:
+    response = await write_client.post(URL, json=game_body(), headers=headers)
+
+    assert response.status_code == 403
+    assert fake_db.games == []
+
+
+async def test_create_game_non_admin_gets_403_even_with_invalid_body(
+    write_client: httpx.AsyncClient,
+) -> None:
+    response = await write_client.post(
+        URL, json={"jackpot": -1}, headers={"X-User-Role": "player"}
+    )
+
+    assert response.status_code == 403
+
+
+async def test_create_game_unknown_game_type_returns_404(
+    write_client: httpx.AsyncClient, fake_db: FakeDatabase
+) -> None:
+    body = game_body(game_type_id=str(uuid.uuid4()))
+
+    response = await write_client.post(URL, json=body, headers=ADMIN_HEADERS)
+
+    assert response.status_code == 404
+    assert fake_db.games == []
+
+
+async def test_create_game_inactive_game_type_returns_422(
+    write_client: httpx.AsyncClient, fake_db: FakeDatabase
+) -> None:
+    fake_db.game_types = [make_game_type(is_active=False)]
+
+    response = await write_client.post(URL, json=game_body(), headers=ADMIN_HEADERS)
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Game type is inactive"}
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"scheduled_at": "2020-01-01T00:00:00Z"},
+        {"scheduled_at": "2099-01-01T00:00:00"},
+        {"scheduled_at": "tomorrow"},
+        {"ticket_price": -1},
+        {"jackpot": -1},
+        {"name": ""},
+        {"game_type_id": "not-a-uuid"},
+    ],
+)
+async def test_create_game_invalid_body_returns_422(
+    write_client: httpx.AsyncClient,
+    fake_db: FakeDatabase,
+    overrides: dict[str, Any],
+) -> None:
+    response = await write_client.post(
+        URL, json=game_body(**overrides), headers=ADMIN_HEADERS
+    )
+
+    assert response.status_code == 422
+    assert fake_db.games == []
+
+
+@pytest.mark.parametrize("missing", ["game_type_id", "scheduled_at"])
+async def test_create_game_missing_required_field_returns_422(
+    write_client: httpx.AsyncClient, missing: str
+) -> None:
+    body = game_body()
+    del body[missing]
+
+    response = await write_client.post(URL, json=body, headers=ADMIN_HEADERS)
+
+    assert response.status_code == 422
